@@ -103,22 +103,6 @@ struct ZoneSignaturesConfig
 	std::string initialZone;
 };
 
-ZoneSignaturesConfig createDefaultZoneSignaturesConfig()
-{
-	ZoneSignaturesConfig config;
-	config.initialZone = "L1";
-	config.zoneSignatures["L1"] = {1, 7, 8, 9, 11, 12, 134, 136, 138, 140, 141, 143, 144, 155, 148, 149, 150, 153, 923};
-	config.zoneSignatures["H1"] = {13, 14, 15, 16, 17, 18, 19, 171, 172};
-	config.zoneSignatures["H2"] = {55, 56, 57, 58, 60, 61, 62, 107, 108, 113, 115, 117, 284, 285, 286, 287, 288, 290};
-	config.zoneSignatures["C2"] = {24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 50, 54};
-	config.zoneSignatures["C3"] = {266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286};
-	config.zoneSignatures["C4"] = {71, 72, 73, 74, 75, 76, 77, 78, 79, 82, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104};
-	config.zoneSignatures["R21"] = {891, 892, 893};
-	config.zoneSignatures["R13"] = {579, 581, 582};
-	config.zoneSignatures["R3"] = {671, 673, 674, 675, 676, 678};
-	return config;
-}
-
 std::string resolveZoneSignaturesPath(const std::string & configuredPath, const std::string & workingDir)
 {
 	if(!configuredPath.empty())
@@ -198,7 +182,8 @@ bool loadZoneSignaturesConfig(const std::string & filePath, ZoneSignaturesConfig
 	cv::FileNode zonesNode = fs["zones"];
 	if(zonesNode.empty())
 	{
-		zonesNode = fs.root();
+		UERROR("Zone-signature JSON file \"%s\" must contain a top-level \"zones\" object.", filePath.c_str());
+		return false;
 	}
 
 	if(!loadZoneSignaturesNode(zonesNode, loadedZones))
@@ -209,15 +194,18 @@ bool loadZoneSignaturesConfig(const std::string & filePath, ZoneSignaturesConfig
 
 	std::string initialZone;
 	cv::FileNode initialZoneNode = fs["initial_zone"];
-	if(!initialZoneNode.empty())
+	if(initialZoneNode.empty())
 	{
-		initialZoneNode >> initialZone;
+		UERROR("Zone-signature JSON file \"%s\" must contain \"initial_zone\".", filePath.c_str());
+		return false;
 	}
+	initialZoneNode >> initialZone;
 	if(initialZone.empty())
 	{
-		initialZone = loadedZones.begin()->first;
+		UERROR("Zone-signature JSON file \"%s\" contains an empty \"initial_zone\".", filePath.c_str());
+		return false;
 	}
-	else if(loadedZones.find(initialZone) == loadedZones.end())
+	if(loadedZones.find(initialZone) == loadedZones.end())
 	{
 		UERROR("Configured initial zone \"%s\" is not defined in \"%s\".", initialZone.c_str(), filePath.c_str());
 		return false;
@@ -1402,61 +1390,52 @@ bool Rtabmap::process(
 	std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
 	if(!zoneInitialized || resolvedZoneSignaturesPath.compare(loadedZoneSignaturesPath) != 0)
 	{
-		ZoneSignaturesConfig zoneConfig = createDefaultZoneSignaturesConfig();
-		if(!resolvedZoneSignaturesPath.empty())
-		{
-			ZoneSignaturesConfig loadedConfig;
-			if(loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
-			{
-				zoneConfig = loadedConfig;
-				UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
-			}
-			else
-			{
-				UWARN("Falling back to built-in zone definitions after failing to load \"%s\".", resolvedZoneSignaturesPath.c_str());
-			}
-		}
-		else
-		{
-			UINFO("Using built-in zone definitions. Set %s or add zone_signatures.json to the working directory to override them.",
-				Parameters::kRtabmapZoneSignaturesPath().c_str());
-		}
-
-		loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
-		zoneSignatures = zoneConfig.zoneSignatures;
-		bootstrapZone = zoneConfig.initialZone;
-		if(zoneSignatures.find(bootstrapZone) == zoneSignatures.end() && !zoneSignatures.empty())
-		{
-			bootstrapZone = zoneSignatures.begin()->first;
-		}
-
+		zoneSignatures.clear();
 		activeZones.clear();
 		activeSignatureIds.clear();
 		zoneHistory.clear();
+		bootstrapZone.clear();
+		loadedZoneSignaturesPath.clear();
 		removedSize = 0;
 		retrievedSize = 0;
 		initialRemoved = false;
-		previousZone = bootstrapZone;
-		newZone = bootstrapZone;
+		previousZone.clear();
+		newZone.clear();
 		zoneUpdated = false;
+		zoneInitialized = false;
 
-		if(!bootstrapZone.empty() && zoneSignatures.find(bootstrapZone) != zoneSignatures.end())
+		if(resolvedZoneSignaturesPath.empty())
 		{
-			activeZones.insert(bootstrapZone);
-			zoneHistory.push_back(bootstrapZone);
-			activeSignatureIds.insert(zoneSignatures.at(bootstrapZone).begin(), zoneSignatures.at(bootstrapZone).end());
+			UERROR("Zone signatures JSON is required. Set %s or place zone_signatures.json in the working directory.",
+				Parameters::kRtabmapZoneSignaturesPath().c_str());
+			return false;
 		}
 
+		ZoneSignaturesConfig loadedConfig;
+		if(!loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
+		{
+			UERROR("Zone initialization aborted because the JSON configuration could not be loaded from \"%s\".", resolvedZoneSignaturesPath.c_str());
+			return false;
+		}
+
+		loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
+		zoneSignatures = loadedConfig.zoneSignatures;
+		bootstrapZone = loadedConfig.initialZone;
+		previousZone = bootstrapZone;
+		newZone = bootstrapZone;
+
+		activeZones.insert(bootstrapZone);
+		zoneHistory.push_back(bootstrapZone);
+		activeSignatureIds.insert(zoneSignatures.at(bootstrapZone).begin(), zoneSignatures.at(bootstrapZone).end());
+
+		UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
 		UWARN("Zone definitions initialized:");
 		for(ZoneSignaturesMap::const_iterator iter = zoneSignatures.begin(); iter != zoneSignatures.end(); ++iter)
 		{
 			UINFO("  Zone %s: %d signatures", iter->first.c_str(), (int)iter->second.size());
 		}
-		if(!bootstrapZone.empty())
-		{
-			UINFO("Bootstrap zone set to %s", bootstrapZone.c_str());
-		}
-		zoneInitialized = !zoneSignatures.empty();
+		UINFO("Bootstrap zone set to %s", bootstrapZone.c_str());
+		zoneInitialized = true;
 	}
 	float hypothesisRatio = 0.0f; // Only used for statistics
 	bool rejectedLoopClosure = false;
