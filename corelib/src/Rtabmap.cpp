@@ -48,6 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/RegistrationInfo.h"
 
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UFile.h>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -90,6 +91,144 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap
 {
+
+namespace
+{
+
+typedef std::map<std::string, std::set<int> > ZoneSignaturesMap;
+
+struct ZoneSignaturesConfig
+{
+	ZoneSignaturesMap zoneSignatures;
+	std::string initialZone;
+};
+
+ZoneSignaturesConfig createDefaultZoneSignaturesConfig()
+{
+	ZoneSignaturesConfig config;
+	config.initialZone = "L1";
+	config.zoneSignatures["L1"] = {1, 7, 8, 9, 11, 12, 134, 136, 138, 140, 141, 143, 144, 155, 148, 149, 150, 153, 923};
+	config.zoneSignatures["H1"] = {13, 14, 15, 16, 17, 18, 19, 171, 172};
+	config.zoneSignatures["H2"] = {55, 56, 57, 58, 60, 61, 62, 107, 108, 113, 115, 117, 284, 285, 286, 287, 288, 290};
+	config.zoneSignatures["C2"] = {24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 50, 54};
+	config.zoneSignatures["C3"] = {266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286};
+	config.zoneSignatures["C4"] = {71, 72, 73, 74, 75, 76, 77, 78, 79, 82, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104};
+	config.zoneSignatures["R21"] = {891, 892, 893};
+	config.zoneSignatures["R13"] = {579, 581, 582};
+	config.zoneSignatures["R3"] = {671, 673, 674, 675, 676, 678};
+	return config;
+}
+
+std::string resolveZoneSignaturesPath(const std::string & configuredPath, const std::string & workingDir)
+{
+	if(!configuredPath.empty())
+	{
+		std::string expandedPath = uReplaceChar(configuredPath, '~', UDirectory::homeDir());
+		if(UFile::exists(expandedPath))
+		{
+			return expandedPath;
+		}
+
+		if(!workingDir.empty())
+		{
+			std::string candidate = workingDir + UDirectory::separator() + expandedPath;
+			if(UFile::exists(candidate))
+			{
+				return candidate;
+			}
+		}
+		return expandedPath;
+	}
+
+	if(!workingDir.empty())
+	{
+		std::string candidate = workingDir + UDirectory::separator() + "zone_signatures.json";
+		if(UFile::exists(candidate))
+		{
+			return candidate;
+		}
+	}
+
+	if(UFile::exists("zone_signatures.json"))
+	{
+		return "zone_signatures.json";
+	}
+
+	return "";
+}
+
+bool loadZoneSignaturesNode(const cv::FileNode & zonesNode, ZoneSignaturesMap & zoneSignatures)
+{
+	if(zonesNode.empty() || zonesNode.type() != cv::FileNode::MAP)
+	{
+		return false;
+	}
+
+	for(cv::FileNodeIterator iter = zonesNode.begin(); iter != zonesNode.end(); ++iter)
+	{
+		if((*iter).type() != cv::FileNode::SEQ)
+		{
+			UWARN("Skipping zone \"%s\" because its JSON value is not an array.", (*iter).name().c_str());
+			continue;
+		}
+
+		std::set<int> ids;
+		for(cv::FileNodeIterator idIter = (*iter).begin(); idIter != (*iter).end(); ++idIter)
+		{
+			int id = 0;
+			(*idIter) >> id;
+			ids.insert(id);
+		}
+		zoneSignatures.insert(std::make_pair((*iter).name(), ids));
+	}
+
+	return !zoneSignatures.empty();
+}
+
+bool loadZoneSignaturesConfig(const std::string & filePath, ZoneSignaturesConfig & config)
+{
+	cv::FileStorage fs(filePath, cv::FileStorage::READ);
+	if(!fs.isOpened())
+	{
+		UERROR("Failed to open zone-signature JSON file \"%s\".", filePath.c_str());
+		return false;
+	}
+
+	ZoneSignaturesMap loadedZones;
+	cv::FileNode zonesNode = fs["zones"];
+	if(zonesNode.empty())
+	{
+		zonesNode = fs.root();
+	}
+
+	if(!loadZoneSignaturesNode(zonesNode, loadedZones))
+	{
+		UERROR("Failed to parse any zone definitions from \"%s\".", filePath.c_str());
+		return false;
+	}
+
+	std::string initialZone;
+	cv::FileNode initialZoneNode = fs["initial_zone"];
+	if(!initialZoneNode.empty())
+	{
+		initialZoneNode >> initialZone;
+	}
+	if(initialZone.empty())
+	{
+		initialZone = loadedZones.begin()->first;
+	}
+	else if(loadedZones.find(initialZone) == loadedZones.end())
+	{
+		UERROR("Configured initial zone \"%s\" is not defined in \"%s\".", initialZone.c_str(), filePath.c_str());
+		return false;
+	}
+
+	config.zoneSignatures = loadedZones;
+	config.initialZone = initialZone;
+	return true;
+}
+
+} // namespace
 
 Rtabmap::Rtabmap() :
 	_publishStats(Parameters::defaultRtabmapPublishStats()),
@@ -136,6 +275,7 @@ Rtabmap::Rtabmap() :
 	_proximityOdomGuess(Parameters::defaultRGBDProximityOdomGuess()),
 	_proximityMergedScanCovFactor(Parameters::defaultRGBDProximityMergedScanCovFactor()),
 	_databasePath(""),
+	_zoneSignaturesPath(Parameters::defaultRtabmapZoneSignaturesPath()),
 	_optimizeFromGraphEnd(Parameters::defaultRGBDOptimizeFromGraphEnd()),
 	_optimizationMaxError(Parameters::defaultRGBDOptimizeMaxError()),
 	_startNewMapOnLoopClosure(Parameters::defaultRtabmapStartNewMapOnLoopClosure()),
@@ -608,6 +748,8 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRGBDProximityOdomGuess(), _proximityOdomGuess);
 	Parameters::parse(parameters, Parameters::kRGBDProximityMergedScanCovFactor(), _proximityMergedScanCovFactor);
 	UASSERT(_proximityMergedScanCovFactor>0.0);
+
+	Parameters::parse(parameters, Parameters::kRtabmapZoneSignaturesPath(), _zoneSignaturesPath);
 
 	bool optimizeFromGraphEndPrevious = _optimizeFromGraphEnd;
 	Parameters::parse(parameters, Parameters::kRGBDOptimizeFromGraphEnd(), _optimizeFromGraphEnd);
@@ -1242,32 +1384,80 @@ bool Rtabmap::process(
 	double timeJoiningTrash = 0;
 	double timeStatsCreation = 0;
 
-	// ★ 함수 시작 부분에 static 변수 선언
-    static bool zoneInitialized = false;
-    static std::map<std::string, std::set<int>> zoneSignatures;
-    static std::set<std::string> activeZones;
-    static std::set<int> activeSignatureIds;
-    static std::string currentZone = "L1";
-    static int removedSize = 0;
-    static int retrievedSize = 0;
+	// Zone state is loaded once and reloaded if the config path changes.
+	static bool zoneInitialized = false;
+	static ZoneSignaturesMap zoneSignatures;
+	static std::string bootstrapZone;
+	static std::string loadedZoneSignaturesPath;
+	static std::set<std::string> activeZones;
+	static std::set<int> activeSignatureIds;
+	static int removedSize = 0;
+	static int retrievedSize = 0;
 	static std::deque<std::string> zoneHistory;
-    
-    // ★ Zone 초기화 (최초 1회만 실행)
-    if(!zoneInitialized)
-    {
-        
+	static bool initialRemoved = false;
+	static std::string previousZone;
+	static bool zoneUpdated = false;
+	static std::string newZone;
 
-		activeZones.insert("L1");
-		zoneHistory.push_back("L1");
-		activeSignatureIds.insert(zoneSignatures["L1"].begin(), zoneSignatures["L1"].end());
-        
-        UWARN("Zone definitions initialized:");
-        for(const auto& zone : zoneSignatures) {
-            UINFO("  Zone %s: %d signatures", zone.first.c_str(), (int)zone.second.size());
-        }
-        zoneInitialized = true;
-    }
-	
+	std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
+	if(!zoneInitialized || resolvedZoneSignaturesPath.compare(loadedZoneSignaturesPath) != 0)
+	{
+		ZoneSignaturesConfig zoneConfig = createDefaultZoneSignaturesConfig();
+		if(!resolvedZoneSignaturesPath.empty())
+		{
+			ZoneSignaturesConfig loadedConfig;
+			if(loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
+			{
+				zoneConfig = loadedConfig;
+				UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
+			}
+			else
+			{
+				UWARN("Falling back to built-in zone definitions after failing to load \"%s\".", resolvedZoneSignaturesPath.c_str());
+			}
+		}
+		else
+		{
+			UINFO("Using built-in zone definitions. Set %s or add zone_signatures.json to the working directory to override them.",
+				Parameters::kRtabmapZoneSignaturesPath().c_str());
+		}
+
+		loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
+		zoneSignatures = zoneConfig.zoneSignatures;
+		bootstrapZone = zoneConfig.initialZone;
+		if(zoneSignatures.find(bootstrapZone) == zoneSignatures.end() && !zoneSignatures.empty())
+		{
+			bootstrapZone = zoneSignatures.begin()->first;
+		}
+
+		activeZones.clear();
+		activeSignatureIds.clear();
+		zoneHistory.clear();
+		removedSize = 0;
+		retrievedSize = 0;
+		initialRemoved = false;
+		previousZone = bootstrapZone;
+		newZone = bootstrapZone;
+		zoneUpdated = false;
+
+		if(!bootstrapZone.empty() && zoneSignatures.find(bootstrapZone) != zoneSignatures.end())
+		{
+			activeZones.insert(bootstrapZone);
+			zoneHistory.push_back(bootstrapZone);
+			activeSignatureIds.insert(zoneSignatures.at(bootstrapZone).begin(), zoneSignatures.at(bootstrapZone).end());
+		}
+
+		UWARN("Zone definitions initialized:");
+		for(ZoneSignaturesMap::const_iterator iter = zoneSignatures.begin(); iter != zoneSignatures.end(); ++iter)
+		{
+			UINFO("  Zone %s: %d signatures", iter->first.c_str(), (int)iter->second.size());
+		}
+		if(!bootstrapZone.empty())
+		{
+			UINFO("Bootstrap zone set to %s", bootstrapZone.c_str());
+		}
+		zoneInitialized = !zoneSignatures.empty();
+	}
 	float hypothesisRatio = 0.0f; // Only used for statistics
 	bool rejectedLoopClosure = false;
 
@@ -2608,14 +2798,47 @@ bool Rtabmap::process(
 
 	timeReactivations = 0;
     UTimer timerReactivations;
-	static std::string previousZone = "L1";
-	static bool zoneUpdated = false;
-	static std::string newZone;
 
 	// ★ Zone history 추적 (가장 오래된 zone부터)
+	newZone.clear();
     
     // ★ 현재 위치 기반 zone 업데이트
-    
+    if(!_optimizedPoses.empty() && _memory->getLastWorkingSignature())
+	{
+		int lastSignatureId = _memory->getLastWorkingSignature()->id();
+		Transform currentPose = uValue(_optimizedPoses, lastSignatureId, Transform());
+		
+		float x = currentPose.x();
+		float y = currentPose.y();
+		
+		// ★ 좌표 기반 zone 결정
+		if(x >= -18.0f && x <= 10.0f && y <= 4.0f) {
+			newZone = "L1";
+		}
+		else if(y >= 2.0f && x <= 12.0f && x >= 6.0f) {
+			newZone = "H1";
+		}
+		else if(x <= -19.0f && x >= -35.0f && y >= 6.0f) {
+			newZone = "H2";
+		}
+		else if(x <= -35.0f && x >= -41.0f){
+			newZone = "C4";
+		}
+		else if(x <= -16.0f && y <= 6.0f) {
+			newZone = "C3";
+		}
+		else if(x <= 8.0f && x >= -25.0f && y >= 8.0f) {
+			newZone = "C2";
+		}
+		else if(x <= -15.0f && x >= -25.0f && y >= 8.7f){
+			newZone = "R13";
+		}
+		else if(x >= 1.0f && x <=7.0f && y >= 8.0f){
+			newZone = "R21";
+		}
+		else if(x <= -41.0f){
+			newZone = "R3";
+		}
 		
 		// ★ Zone이 이미 activeZones에 있는지 확인
 		if(!newZone.empty() && newZone != previousZone)
@@ -2639,32 +2862,38 @@ bool Rtabmap::process(
     // ★ RETRIEVE 전 메모리 검증 및 unload (forget 수행)
     // ============================================================
     
-	static bool initial_removed = false;
+		if(!initialRemoved){
+			if(_maxMemoryAllowed != 0)
+			{
+				int currentWMSize = (int)_memory->getWorkingMem().size();
+				int totalAfterRetrieve = currentWMSize + (int)activeSignatureIds.size();
+				ULOGGER_WARN("Initial Unloading");
+				while(totalAfterRetrieve > (int)_maxMemoryAllowed){
+					ZoneSignaturesMap::const_iterator bootstrapZoneIter = zoneSignatures.find(bootstrapZone);
+					if(bootstrapZoneIter == zoneSignatures.end())
+					{
+						UWARN("Bootstrap zone \"%s\" is not defined, skipping initial unloading.", bootstrapZone.c_str());
+						break;
+					}
+					std::list<int> transferred = _memory->forget(bootstrapZoneIter->second);
+					removedSize += (int)transferred.size();
 
-	if(!initial_removed){
-		int currentWMSize = _memory->getWorkingMem().size();
-		int totalAfterRetrieve = currentWMSize + activeSignatureIds.size();
-		ULOGGER_WARN("Initial Unloading");
-		while(totalAfterRetrieve > 30){
-			std::list<int> transferred = _memory->forget(zoneSignatures["L1"]);
-			removedSize += transferred.size();
+					if(transferred.empty()) {
+						UWARN("No more signatures can be removed! Memory still exceeded: %d > %d", 
+							(int)totalAfterRetrieve, _maxMemoryAllowed);
+						break;
+					}
 
-			if(transferred.empty()) {
-				UWARN("No more signatures can be removed! Memory still exceeded: %d > %d", 
-					(int)totalAfterRetrieve, _maxMemoryAllowed);
-				break;
+					currentWMSize = (int)_memory->getWorkingMem().size();
+					totalAfterRetrieve = currentWMSize + (int)activeSignatureIds.size();
+							
+					ULOGGER_INFO("After forget - WM: %d, Total: %d / Max: %d", 
+								currentWMSize, totalAfterRetrieve, _maxMemoryAllowed);
+				}
 			}
 
-			currentWMSize = _memory->getWorkingMem().size();
-			totalAfterRetrieve = currentWMSize + activeSignatureIds.size();
-					
-			ULOGGER_INFO("After forget - WM: %d, Total: %d / Max: %d", 
-						(int)currentWMSize, (int)totalAfterRetrieve, _maxMemoryAllowed);
+			initialRemoved = true;
 		}
-
-		initial_removed = true;
-	}
-    
     if(zoneUpdated)
 	{
 		ULOGGER_WARN("Zone updated - processing memory management");
@@ -2773,31 +3002,50 @@ bool Rtabmap::process(
     if(zoneSignatures.find(newZone) != zoneSignatures.end())
     {
         const auto& zoneIds = zoneSignatures.at(newZone);
-        
-        UWARN("retrieve******************");
-        ULOGGER_WARN("=== Retrieving %d signatures from zone: %s ===", 
-                    (int)zoneIds.size(), newZone.c_str());
-        
-        // ★ zoneIds를 std::list<int>로 변환
-        std::list<int> idsToRetrieve(zoneIds.begin(), zoneIds.end());
 
-        signaturesRetrieved = _memory->reactivateSignatures(
-            idsToRetrieve,
-            _maxRetrieved + (unsigned int)idsToRetrieve.size(),
-            timeRetrievalDbAccess);
-
-        ULOGGER_WARN("Retrieved %d signatures", (int)signaturesRetrieved.size());
-
-        if(signaturesRetrieved.size() > 0) {
-            timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
-            UINFO("Total timeRetrievalDbAccess = %fs", timeRetrievalDbAccess);
-        }
-        
-        if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
+        // ★ 이미 해당 zone의 signature들이 WM에 모두 올라와 있는지 확인
+        bool needRetrieve = false;
+        const std::map<int, double> & workingMem = _memory->getWorkingMem();
+        for(const auto & id : zoneIds)
         {
-            UWARN("Signatures retrieved from memory management, clearing global scan map");
-            _globalScanMap.clear();
-            _globalScanMapPoses.clear();
+            if(workingMem.find(id) == workingMem.end())
+            {
+                needRetrieve = true;
+                break;
+            }
+        }
+
+        if(needRetrieve)
+        {
+            UWARN("retrieve******************");
+            ULOGGER_WARN("=== Retrieving %d signatures from zone: %s ===", 
+                        (int)zoneIds.size(), newZone.c_str());
+            
+            // ★ zoneIds를 std::list<int>로 변환
+            std::list<int> idsToRetrieve(zoneIds.begin(), zoneIds.end());
+
+            signaturesRetrieved = _memory->reactivateSignatures(
+                idsToRetrieve,
+                _maxRetrieved + (unsigned int)idsToRetrieve.size(),
+                timeRetrievalDbAccess);
+
+            ULOGGER_WARN("Retrieved %d signatures", (int)signaturesRetrieved.size());
+
+            if(signaturesRetrieved.size() > 0) {
+                timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
+                UINFO("Total timeRetrievalDbAccess = %fs", timeRetrievalDbAccess);
+            }
+            
+            if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
+            {
+                UWARN("Signatures retrieved from memory management, clearing global scan map");
+                _globalScanMap.clear();
+                _globalScanMapPoses.clear();
+            }
+        }
+        else
+        {
+            ULOGGER_INFO("Zone %s already fully loaded in WM, skipping retrieval", newZone.c_str());
         }
     }
     else

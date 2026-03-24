@@ -317,6 +317,7 @@ private:
 	bool _proximityOdomGuess;
 	double _proximityMergedScanCovFactor;
 	std::string _databasePath;
+	std::string _zoneSignaturesPath;
 	bool _optimizeFromGraphEnd;
 	float _optimizationMaxError;
 	bool _startNewMapOnLoopClosure;
