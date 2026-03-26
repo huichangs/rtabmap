@@ -571,19 +571,27 @@ void VWDictionary::update()
 		else if(_strategy >= kNNBruteForce &&
 				_notIndexedWords.size() &&
 				_removedIndexedWords.size() == 0 &&
-				_visualWords.size() &&
-				_dataTree.rows)
+				_visualWords.size())
 		{
 			//just add not indexed words
 			int i = _dataTree.rows;
-			_dataTree.reserve(_dataTree.rows + _notIndexedWords.size());
+			if(!_dataTree.empty()) {
+				_dataTree.reserve(_dataTree.rows + _notIndexedWords.size());
+			}
 			for(std::set<int>::iterator iter=_notIndexedWords.begin(); iter!=_notIndexedWords.end(); ++iter)
 			{
 				VisualWord* w = uValue(_visualWords, *iter, (VisualWord*)0);
 				UASSERT(w);
-				UASSERT(w->getDescriptor().cols == _dataTree.cols);
-				UASSERT(w->getDescriptor().type() == _dataTree.type());
-				_dataTree.push_back(w->getDescriptor());
+				if(_dataTree.empty())
+				{
+					_dataTree = w->getDescriptor().clone();
+				}
+				else
+				{
+					UASSERT(w->getDescriptor().cols == _dataTree.cols);
+					UASSERT(w->getDescriptor().type() == _dataTree.type());
+					_dataTree.push_back(w->getDescriptor());
+				}
 				_mapIndexId.insert(_mapIndexId.end(), std::pair<int, int>(i, w->id()));
 				std::pair<std::map<int, int>::iterator, bool> inserted = _mapIdIndex.insert(std::pair<int, int>(w->id(), i));
 				UASSERT(inserted.second);
@@ -860,7 +868,7 @@ int VWDictionary::getNextId()
 	return ++_lastWordId;
 }
 
-void VWDictionary::addWordRef(int wordId, int signatureId)
+bool VWDictionary::addWordRef(int wordId, int signatureId)
 {
 	VisualWord * vw = 0;
 	vw = uValue(_visualWords, wordId, vw);
@@ -870,10 +878,12 @@ void VWDictionary::addWordRef(int wordId, int signatureId)
 		_totalActiveReferences += 1;
 
 		_unusedWords.erase(vw->id());
+		return true;
 	}
 	else
 	{
-		UERROR("Not found word %d (dict size=%d)", wordId, (int)_visualWords.size());
+		UWARN("Not found word %d (dict size=%d)", wordId, (int)_visualWords.size());
+		return false;
 	}
 }
 

@@ -755,10 +755,13 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->source_checkBox_ignoreLandmarks, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_ignoreFeatures, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_ignorePriors, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->source_checkBox_ignoreIMU, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_spinBox_databaseStartId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_spinBox_databaseStopId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_useDbStamps, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_lineEdit_databaseCameraIndex, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->source_checkBox_overrideLocalTransforms, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->source_lineEdit_databaseLocalTransformOffset, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_stereoToDepthDB, SIGNAL(toggled(bool)), _ui->checkbox_stereo_depthGenerated, SLOT(setChecked(bool)));
 	connect(_ui->checkbox_stereo_depthGenerated, SIGNAL(toggled(bool)), _ui->source_checkBox_stereoToDepthDB, SLOT(setChecked(bool)));
 
@@ -1067,6 +1070,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	// Database
 	_ui->checkBox_dbInMemory->setObjectName(Parameters::kDbSqlite3InMemory().c_str());
+	_ui->checkBox_dbReadOnly->setObjectName(Parameters::kMemLocalizationReadOnly().c_str());
 	_ui->spinBox_dbCacheSize->setObjectName(Parameters::kDbSqlite3CacheSize().c_str());
 	_ui->comboBox_dbJournalMode->setObjectName(Parameters::kDbSqlite3JournalMode().c_str());
 	_ui->comboBox_dbSynchronous->setObjectName(Parameters::kDbSqlite3Synchronous().c_str());
@@ -1354,6 +1358,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->odom_flow_iterations->setObjectName(Parameters::kVisCorFlowIterations().c_str());
 	_ui->odom_flow_eps->setObjectName(Parameters::kVisCorFlowEps().c_str());
 	_ui->odom_flow_gpu->setObjectName(Parameters::kVisCorFlowGpu().c_str());
+	_ui->odom_flow_useMinEigenVals->setObjectName(Parameters::kVisCorFlowUseMinEigenVals().c_str());
+	_ui->odom_flow_minEigThreshold->setObjectName(Parameters::kVisCorFlowMinEigThreshold().c_str());
+	_ui->odom_flow_errorThreshold->setObjectName(Parameters::kVisCorFlowErrorThreshold().c_str());
 	_ui->loopClosure_bundle->setObjectName(Parameters::kVisBundleAdjustment().c_str());
 
 	//RegistrationIcp
@@ -1674,13 +1681,18 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->stereo_maxDisparity->setObjectName(Parameters::kStereoMaxDisparity().c_str());
 	_ui->stereo_ssd->setObjectName(Parameters::kStereoSSD().c_str());
 	_ui->stereo_flow_eps->setObjectName(Parameters::kStereoEps().c_str());
+	_ui->stereo_flow_useMinEigenVals->setObjectName(Parameters::kStereoUseMinEigenVals().c_str());
+	_ui->stereo_flow_minEigThreshold->setObjectName(Parameters::kStereoMinEigThreshold().c_str());
+	_ui->stereo_flow_errorThreshold->setObjectName(Parameters::kStereoErrorThreshold().c_str());
 	_ui->stereo_opticalFlow->setObjectName(Parameters::kStereoOpticalFlow().c_str());
 	_ui->stereo_flow_gpu->setObjectName(Parameters::kStereoGpu().c_str());
-	
 
 	// Odometry Open3D
 	_ui->odom_open3d_method->setObjectName(Parameters::kOdomOpen3DMethod().c_str());
 	_ui->odom_open3d_max_depth->setObjectName(Parameters::kOdomOpen3DMaxDepth().c_str());
+
+	// Odometry CuVSLAM
+	_ui->odom_cuvslam_multicam_mode->setObjectName(Parameters::kOdomCuVSLAMMulticamMode().c_str());
 
 	//StereoDense
 	_ui->comboBox_stereoDense_strategy->setObjectName(Parameters::kStereoDenseStrategy().c_str());
@@ -2192,10 +2204,13 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->source_checkBox_ignoreLandmarks->setChecked(true);
 		_ui->source_checkBox_ignoreFeatures->setChecked(true);
 		_ui->source_checkBox_ignorePriors->setChecked(false);
+		_ui->source_checkBox_ignoreIMU->setChecked(false);
 		_ui->source_spinBox_databaseStartId->setValue(0);
 		_ui->source_spinBox_databaseStopId->setValue(0);
 		_ui->source_lineEdit_databaseCameraIndex->setText("");
 		_ui->source_checkBox_useDbStamps->setChecked(true);
+		_ui->source_checkBox_overrideLocalTransforms->setChecked(false);
+		_ui->source_lineEdit_databaseLocalTransformOffset->setText("");
 
 #ifdef _WIN32
 		_ui->comboBox_cameraRGBD->setCurrentIndex(kSrcOpenNI2-kSrcRGBD); // openni2
@@ -2949,10 +2964,14 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->source_checkBox_ignoreLandmarks->setChecked(settings.value("ignoreLandmarks", _ui->source_checkBox_ignoreLandmarks->isChecked()).toBool());
 	_ui->source_checkBox_ignoreFeatures->setChecked(settings.value("ignoreFeatures", _ui->source_checkBox_ignoreFeatures->isChecked()).toBool());
 	_ui->source_checkBox_ignorePriors->setChecked(settings.value("ignorePriors", _ui->source_checkBox_ignorePriors->isChecked()).toBool());
+	_ui->source_checkBox_ignoreIMU->setChecked(settings.value("ignoreImu", _ui->source_checkBox_ignoreIMU->isChecked()).toBool());
+	
 	_ui->source_spinBox_databaseStartId->setValue(settings.value("startId", _ui->source_spinBox_databaseStartId->value()).toInt());
 	_ui->source_spinBox_databaseStopId->setValue(settings.value("stopId", _ui->source_spinBox_databaseStopId->value()).toInt());
 	_ui->source_lineEdit_databaseCameraIndex->setText(settings.value("cameraIndices", _ui->source_lineEdit_databaseCameraIndex->text()).toString());
 	_ui->source_checkBox_useDbStamps->setChecked(settings.value("useDatabaseStamps", _ui->source_checkBox_useDbStamps->isChecked()).toBool());
+	_ui->source_checkBox_overrideLocalTransforms->setChecked(settings.value("overrideLocalTransforms", _ui->source_checkBox_overrideLocalTransforms->isChecked()).toBool());
+	_ui->source_lineEdit_databaseLocalTransformOffset->setText(settings.value("localTransformOffsets", _ui->source_lineEdit_databaseLocalTransformOffset->text()).toString());
 	settings.endGroup(); // Database
 
 	settings.endGroup(); // Camera
@@ -3564,10 +3583,13 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("ignoreLandmarks", _ui->source_checkBox_ignoreLandmarks->isChecked());
 	settings.setValue("ignoreFeatures",  _ui->source_checkBox_ignoreFeatures->isChecked());
 	settings.setValue("ignorePriors",  _ui->source_checkBox_ignorePriors->isChecked());
+	settings.setValue("ignoreImu",  _ui->source_checkBox_ignoreIMU->isChecked());
 	settings.setValue("startId",          _ui->source_spinBox_databaseStartId->value());
 	settings.setValue("stopId",          _ui->source_spinBox_databaseStopId->value());
 	settings.setValue("cameraIndices",       _ui->source_lineEdit_databaseCameraIndex->text());
 	settings.setValue("useDatabaseStamps", _ui->source_checkBox_useDbStamps->isChecked());
+	settings.setValue("overrideLocalTransforms", _ui->source_checkBox_overrideLocalTransforms->isChecked());
+	settings.setValue("localTransformOffsets", _ui->source_lineEdit_databaseLocalTransformOffset->text());
 	settings.endGroup(); // Database
 
 	settings.endGroup(); // Camera
@@ -5542,6 +5564,7 @@ void PreferencesDialog::updateOdometryStackedIndex(int index)
 	_ui->groupBox_odomVINSFusion->setVisible(index==9);
 	_ui->groupBox_odomOpenVINS->setVisible(index==10);
 	_ui->groupBox_odomOpen3D->setVisible(index==12);
+	_ui->groupBox_odomCuvslam->setVisible(index==13);
 }
 
 void PreferencesDialog::useOdomFeatures()
@@ -7168,6 +7191,54 @@ Camera * PreferencesDialog::createCamera(
 				}
 			}
 		}
+
+		std::vector<Transform> localTransformOverrides;
+		if(_ui->source_checkBox_overrideLocalTransforms->isChecked())
+		{
+			if(!_ui->lineEdit_sourceLocalTransform->text().isEmpty())
+			{
+				std::list<std::string> transforms = uSplit(_ui->lineEdit_sourceLocalTransform->text().replace("PI_2", QString::number(3.141592/2.0)).toStdString(), ';');
+				for(auto t: transforms)
+				{
+					localTransformOverrides.push_back(Transform::fromString(t));
+				}
+
+				// offset(s)?
+				if(!_ui->source_lineEdit_databaseLocalTransformOffset->text().isEmpty())
+				{
+					std::vector<float> localTransformOffsetOverrides;
+					std::list<std::string> offsetStr = uSplit(_ui->source_lineEdit_databaseLocalTransformOffset->text().toStdString(), ' ');
+					for(std::list<std::string>::iterator iter=offsetStr.begin(); iter!=offsetStr.end(); ++iter)
+					{
+						localTransformOffsetOverrides.push_back(uStr2Float(*iter));
+						UINFO("Camera offset = %f", localTransformOffsetOverrides.back());
+					}
+					if(!localTransformOffsetOverrides.empty())
+					{
+						if(!localTransformOverrides.empty() && localTransformOffsetOverrides.size() > 1 && localTransformOffsetOverrides.size() != localTransformOverrides.size())
+						{
+							QMessageBox::warning(this, tr("DBReader"),
+								tr( "Camera lens offset vector size (%1) is not equal to local transform overrides (%2). "
+									"Camera lens offset vector should be one to affect all cameras or the same size than local transforms overrides.").arg(localTransformOffsetOverrides.size()).arg(localTransformOverrides.size()), QMessageBox::Ok);
+							return 0;
+						}
+						else {
+							for(size_t i=0; i<localTransformOverrides.size(); ++i)
+							{
+								float offset = localTransformOffsetOverrides.size()==1?localTransformOffsetOverrides[0]:localTransformOffsetOverrides[i];
+								localTransformOverrides[i] *= Transform(0, offset, 0);
+								UINFO("Overriding camera's local transform %ld to %s (offset=%f)", i, localTransformOverrides[i].prettyPrint().c_str(), offset);
+							}
+						}
+					}
+				}
+			}
+			else if(!_ui->source_lineEdit_databaseLocalTransformOffset->text().isEmpty())
+			{
+				UWARN("Overriding camera offsets can only be used when camera local transforms are overriden. Ignoring offsets :\"%s\"", 
+					_ui->source_lineEdit_databaseLocalTransformOffset->text().toStdString().c_str());
+			}
+		}
 		
 		camera = new DBReader(_ui->source_database_lineEdit_path->text().toStdString(),
 				_ui->source_checkBox_useDbStamps->isChecked()?-1:this->getGeneralInputRate(),
@@ -7182,7 +7253,9 @@ Camera * PreferencesDialog::createCamera(
 				_ui->source_checkBox_ignoreFeatures->isChecked(),
 				0,
 				-1,
-				_ui->source_checkBox_ignorePriors->isChecked());
+				_ui->source_checkBox_ignorePriors->isChecked(),
+				_ui->source_checkBox_ignoreIMU->isChecked(),
+				localTransformOverrides);
 	}
 	else
 	{

@@ -83,6 +83,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_rgbCompressionFormat(Parameters::defaultMemImageCompressionFormat()),
 	_depthCompressionFormat(Parameters::defaultMemDepthCompressionFormat()),
 	_incrementalMemory(Parameters::defaultMemIncrementalMemory()),
+	_localizationReadOnly(Parameters::defaultMemLocalizationReadOnly()),
 	_localizationDataSaved(Parameters::defaultMemLocalizationDataSaved()),
 	_flannIndexSaved(Parameters::defaultKpFlannIndexSaved()),
 	_reduceGraph(Parameters::defaultMemReduceGraph()),
@@ -185,10 +186,6 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 			_dbDriver = 0; // HACK for the clear() below to think that there is no db
 		}
 	}
-	else if(!_memoryChanged && _linksChanged)
-	{
-		_dbDriver->setTimestampUpdateEnabled(false); // update links only
-	}
 	this->clear();
 	if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Clearing memory, done!"));
 
@@ -212,10 +209,10 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 	bool success = true;
 	if(_dbDriver)
 	{
-		_dbDriver->setTimestampUpdateEnabled(true); // make sure that timestamp update is enabled (may be disabled above)
+
 		success = false;
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database \"") + dbUrl + "\"..."));
-		if(_dbDriver->openConnection(dbUrl, dbOverwritten))
+		if(_dbDriver->openConnection(dbUrl, dbOverwritten, isReadOnly()))
 		{
 			success = true;
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database \"") + dbUrl + "\", done!"));
@@ -245,6 +242,7 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 
 		if(loadAllNodesInWM)
 		{
+			UDEBUG("Loading all nodes to WM...");
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading all nodes to WM...")));
 			std::set<int> ids;
 			_dbDriver->getAllNodeIds(ids, true);
@@ -252,6 +250,7 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 		}
 		else
 		{
+			UDEBUG("Loading last nodes to WM...");
 			// load previous session working memory
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading last nodes to WM...")));
 			_dbDriver->loadLastNodes(dbSignatures, !_loadVisualLocalFeaturesOnInit);
@@ -438,7 +437,8 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 		UTimer timer;
 		// Enable loaded signatures
 		const std::map<int, Signature *> & signatures = this->getSignatures();
-		for(std::map<int, Signature *>::const_iterator i=signatures.begin(); i!=signatures.end(); ++i)
+		bool corruptedDictionary = false;
+		for(std::map<int, Signature *>::const_iterator i=signatures.begin(); i!=signatures.end() && !corruptedDictionary; ++i)
 		{
 			Signature * s = this->_getSignature(i->first);
 			UASSERT(s != 0);
@@ -451,12 +451,114 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 				{
 					if(iter->first > 0)
 					{
-						_vwd->addWordRef(iter->first, i->first);
+						if(!_vwd->addWordRef(iter->first, s->id()))
+						{
+							corruptedDictionary = true;
+							break;
+						}
 					}
 				}
-				s->setEnabled(true);
+				s->setEnabled(!corruptedDictionary);
+				if(corruptedDictionary)
+				{
+					//revert all changes from that signature till it broke above
+					for(std::multimap<int, int>::const_iterator iter = words.begin(); iter!=words.end(); ++iter)
+					{
+						if(iter->first > 0)
+						{
+							_vwd->removeAllWordRef(iter->first, s->id());
+						}
+					}
+				}
 			}
 		}
+		if(corruptedDictionary)
+		{
+			if(!_vwd->isIncremental())
+			{
+				UERROR("The dictionary is empty or missing some words from nodes in WM, "
+					"we cannot repair it because it is a fixed dictionary. Make sure you "
+					"are using the right fixed dictionary that was used to generate the map.");
+			}
+			else
+			{
+				std::string msg = uFormat(
+					"The dictionary is empty or missing some words from nodes in WM, "
+					"we will try to repair it. This can be caused by rtabmap closing before it has time "
+					"to save the dictionary. Re-creating the dictionary from %ld nodes...",
+					signatures.size());
+				UWARN("%s", msg.c_str());
+				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(msg));
+
+				//remove all words ref
+
+				const std::map<int, VisualWord *> & addedWords = _vwd->getVisualWords();
+				int nodesRepaired = 0;
+				size_t oldSize = addedWords.size();
+				std::string assertMsg = 
+					"If we assert here, the problem is maybe deeper. Try "
+					"to use rtabmap-recovery tool instead to fix the database.";
+				for(std::map<int, Signature *>::const_iterator i=signatures.begin(); i!=signatures.end(); ++i)
+				{
+					Signature * s = this->_getSignature(i->first);
+					UASSERT_MSG(s != 0, assertMsg.c_str());
+
+					if(s->isEnabled())
+					{
+						// Words already in dictionary and references added
+						continue;
+					}
+
+					const std::multimap<int, int> * words = &s->getWords();
+					if(words->size())
+					{
+						cv::Mat descriptors = s->getWordsDescriptors();
+						std::multimap<int, int> loadedWords;
+						if(descriptors.empty())
+						{
+							// We may have started rtabmap without loading features, check in the database
+							std::multimap<int, int> w;
+							std::vector<cv::KeyPoint> k;
+							std::vector<cv::Point3f> p;
+							_dbDriver->getLocalFeatures(s->id(), loadedWords, k, p, descriptors);
+							UASSERT_MSG(loadedWords.size() == words->size(), assertMsg.c_str()); // Just doublecheck
+							words = &loadedWords; // The index will be set
+							UASSERT_MSG(!descriptors.empty(), assertMsg.c_str());
+						}
+						bool repaired = false;
+						for(std::multimap<int, int>::const_iterator iter = words->begin(); iter!=words->end(); ++iter)
+						{
+							if(iter->first > 0)
+							{
+								if(addedWords.find(iter->first) == addedWords.end())
+								{
+									UASSERT_MSG(iter->second >= 0 && iter->second < descriptors.rows, 
+										uFormat("iter->second=%d descriptors.rows=%d (signature=%d word=%d). %s",
+										iter->second, descriptors.rows, s->id(), iter->first, assertMsg.c_str()).c_str());
+									_vwd->addWord(new VisualWord(iter->first, descriptors.row(iter->second).clone()));
+									repaired = true;
+								}
+								UASSERT_MSG(_vwd->addWordRef(iter->first, s->id()), assertMsg.c_str());
+							}
+						}
+						nodesRepaired += (repaired?1:0);
+						s->setEnabled(true);
+					}
+				}
+
+				msg = uFormat(
+					"Regenerated the dictionary with %ld missing words (%ld -> %ld) from %d nodes.",
+					addedWords.size() - oldSize,
+					oldSize,
+					addedWords.size(),
+					nodesRepaired);
+				UWARN("%s", msg.c_str());
+				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(msg));
+				_memoryChanged = true; // This will force rtabmap to save back the dictionary even if we don't process any new data
+				_vwd->update();
+			}
+		}
+
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Adding word references, done! (%d)", _vwd->getTotalActiveReferences())));
 
 		if(_vwd->getUnusedWordsSize() && _vwd->isIncremental())
@@ -531,16 +633,23 @@ void Memory::close(bool databaseSaved, bool postInitClosingEvents, const std::st
 
 	UDEBUG("_memoryChanged=%d _linksChanged=%d databaseNameChanged=%d", _memoryChanged?1:0, _linksChanged?1:0, databaseNameChanged?1:0);
 
-	if(!databaseSaved || (!_memoryChanged && !_linksChanged && !databaseNameChanged))
+	if(!databaseSaved || (!_memoryChanged && !_linksChanged && !databaseNameChanged) || this->isReadOnly())
 	{
 		if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("No changes added to database.")));
 
 		UINFO("No changes added to database.");
 		if(_dbDriver)
 		{
-			saveFlannIndex(postInitClosingEvents);
+			if(!this->isReadOnly()) {
+				saveFlannIndex(postInitClosingEvents);
+			}
+			else if(_memoryChanged || _linksChanged || databaseNameChanged)
+			{
+				UWARN("Memory has been modified (nodes=%s links=%s name=%s) but the database is read-only, changes are not saved to database.",
+					_memoryChanged?"true":"false", _linksChanged?"true":"false", databaseNameChanged?"true":"false");
+			}
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(uFormat("Closing database \"%s\"...", _dbDriver->getUrl().c_str())));
-			_dbDriver->closeConnection(false, ouputDatabasePath);
+			_dbDriver->closeConnection(false);
 			delete _dbDriver;
 			_dbDriver = 0;
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit("Closing database, done!"));
@@ -556,12 +665,6 @@ void Memory::close(bool databaseSaved, bool postInitClosingEvents, const std::st
 		if(!_memoryChanged && _dbDriver)
 		{
 			saveFlannIndex(postInitClosingEvents);
-
-			if(_linksChanged) {
-				// don't update the time stamps!
-				UDEBUG("");
-				_dbDriver->setTimestampUpdateEnabled(false);
-			}
 		}
 		this->clear();
 		if(_dbDriver)
@@ -663,6 +766,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMarkerVarianceOrientationIgnored(), _markerOrientationIgnored);
 	Parameters::parse(params, Parameters::kMemLocalizationDataSaved(), _localizationDataSaved);
 	Parameters::parse(params, Parameters::kKpFlannIndexSaved(), _flannIndexSaved);
+	Parameters::parse(params, Parameters::kMemLocalizationReadOnly(), _localizationReadOnly);
 
 	if(_markerAngVariance>=9999)
 	{
@@ -1865,6 +1969,7 @@ void Memory::clear()
 			uInsert(parameters, parameters_);
 			parameters.erase(Parameters::kRtabmapWorkingDirectory()); // don't save working directory as it is machine dependent
 			UDEBUG("");
+			_dbDriver->setTimestampUpdateEnabled(true); // Only re-stamp if we updated the memory
 			_dbDriver->addInfoAfterRun(memSize,
 					_lastSignature?_lastSignature->id():0,
 					UProcessInfo::getMemoryUsage(),
@@ -1938,6 +2043,7 @@ void Memory::clear()
 		_dbDriver->join(true);
 		cleanUnusedWords();
 		_dbDriver->emptyTrashes();
+		_dbDriver->setTimestampUpdateEnabled(false);
 	}
 	_vwd->clear(_dbDriver!=NULL);
 	UDEBUG("");
@@ -3626,7 +3732,7 @@ void Memory::updateLink(const Link & link, bool updateInDatabase)
 
 			if(oldType!=Link::kVirtualClosure || link.type()!=Link::kVirtualClosure)
 			{
-				_linksChanged = true;
+				_linksChanged = _incrementalMemory || (fromS->isSaved() && toS->isSaved());
 			}
 		}
 		else
@@ -4276,6 +4382,29 @@ void Memory::getNodeWordsAndGlobalDescriptors(int nodeId,
 		words3 = s->getWords3();
 		wordsDescriptors = s->getWordsDescriptors();
 		globalDescriptors = s->sensorData().globalDescriptors();
+
+		if(!words.empty() && wordsKpts.empty() && _dbDriver)
+		{
+			std::multimap<int, int> tmpWords;
+			_dbDriver->getLocalFeatures(nodeId, tmpWords, wordsKpts, words3, wordsDescriptors);
+			if(!tmpWords.empty() && !wordsKpts.empty())
+			{
+				UASSERT(tmpWords.size() == words.size());
+				std::map<int, int> wordsChanged = s->getWordsChanged();
+				for(const auto & iter: wordsChanged) {
+					std::list<int> subwords = uValues(tmpWords, iter.first); // old id
+					if(subwords.size())
+					{
+						tmpWords.erase(iter.first);
+						for(std::list<int>::const_iterator jter=subwords.begin(); jter!=subwords.end(); ++jter)
+						{
+							tmpWords.insert(std::pair<int, int>(iter.second, (*jter))); // new id
+						}
+					}
+				}
+				words = tmpWords;
+			}
+		}
 	}
 	else if(_dbDriver)
 	{
@@ -4302,11 +4431,6 @@ void Memory::getNodeWordsAndGlobalDescriptors(int nodeId,
 				delete signatures.front();
 			}
 		}
-	}
-	if(!words.empty() && wordsKpts.empty() && _dbDriver)
-	{
-		std::multimap<int, int> tmpWords;
-		_dbDriver->getLocalFeatures(nodeId, tmpWords, wordsKpts, words3, wordsDescriptors);
 	}
 }
 
@@ -5818,7 +5942,6 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		cameraModels.size() == 1 &&
 		words.size() &&
 		(words3D.size() == 0 || (words.size() == words3D.size() && words3DValid!=(int)words3D.size())) &&
-		_registrationPipeline->isImageRequired() &&
 		_signatures.size() &&
 		_signatures.rbegin()->second->mapId() == _idMapCount) // same map
 	{
@@ -5862,11 +5985,14 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 
 			// The following is used only to re-estimate the correspondences, the returned transform is ignored
 			Transform tmpt;
-			RegistrationVis reg(parameters_);
+			ParametersMap tmpParams = parameters_;
+			// Pure 2D-2D without guess would generate variance=1
+			uInsert(tmpParams, ParametersPair(Parameters::kVisEpipolarGeometryVar(), "1"));
+			RegistrationVis reg(tmpParams);
 			if(_registrationPipeline->isScanRequired())
 			{
 				// If icp is used, remove it to just do visual registration
-				RegistrationVis vis(parameters_);
+				RegistrationVis vis(tmpParams);
 				tmpt = vis.computeTransformationMod(cpCurrent, cpPrevious, cameraTransform);
 			}
 			else
@@ -5888,11 +6014,18 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			{
 				previousWords.insert(std::make_pair(iter->first, cpPrevious.getWordsKpts()[iter->second]));
 			}
+			float reprojError = Parameters::defaultVisPnPReprojError();
+			int varianceMedianRatio = Parameters::defaultVisPnPVarianceMedianRatio();
+			Parameters::parse(parameters_, Parameters::kVisPnPReprojError(), reprojError);
+			Parameters::parse(parameters_, Parameters::kVisPnPVarianceMedianRatio(), varianceMedianRatio);
 			std::map<int, cv::Point3f> inliers = util3d::generateWords3DMono(
 					currentWords,
 					previousWords,
 					cameraModels[0],
-					cameraTransform);
+					cameraTransform,
+					reprojError,
+					0.99f,
+					varianceMedianRatio);
 
 			UDEBUG("inliers=%d", (int)inliers.size());
 
@@ -6569,7 +6702,10 @@ void Memory::enableWordsRef(const std::list<int> & signatureIds)
 			{
 				if(keys.at(i)>0)
 				{
-					_vwd->addWordRef(keys.at(i), (*j)->id());
+					if(_vwd->addWordRef(keys.at(i), (*j)->id()))
+					{
+						UERROR("Could not add word ref %d to node %d!?", keys.at(i), (*j)->id());
+					}
 				}
 			}
 			(*j)->setEnabled(true);
