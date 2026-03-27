@@ -106,6 +106,24 @@ struct ZoneSignaturesConfig
 	std::string initialZone;
 };
 
+ZoneSignaturesConfig createDefaultZoneSignaturesConfig()
+{
+	ZoneSignaturesConfig config;
+	config.initialZone = "L1";
+
+	config.zoneSignatures["L1"] = std::set<int>{1, 7, 8, 9, 11, 12, 134, 136, 138, 140, 141, 143, 144, 155, 148, 149, 150, 153, 923};
+	config.zoneSignatures["H1"] = std::set<int>{13, 14, 15, 16, 17, 18, 19, 171, 172};
+	config.zoneSignatures["H2"] = std::set<int>{55, 56, 57, 58, 60, 61, 62, 107, 108, 113, 115, 117, 284, 285, 286, 287, 288, 290};
+	config.zoneSignatures["C2"] = std::set<int>{24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 50, 54};
+	config.zoneSignatures["C3"] = std::set<int>{266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286};
+	config.zoneSignatures["C4"] = std::set<int>{71, 72, 73, 74, 75, 76, 77, 78, 79, 82, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104};
+	config.zoneSignatures["R21"] = std::set<int>{891, 892, 893};
+	config.zoneSignatures["R13"] = std::set<int>{579, 581, 582};
+	config.zoneSignatures["R3"] = std::set<int>{671, 673, 674, 675, 676, 678};
+
+	return config;
+}
+
 void appendUniqueZoneSignaturesCandidate(std::vector<std::string> & candidates, const std::string & path)
 {
 	if(path.empty())
@@ -1458,18 +1476,21 @@ bool Rtabmap::process(
 		zoneUpdated = false;
 		zoneInitialized = false;
 
+		ZoneSignaturesConfig loadedConfig;
+		bool usingFallbackZoneConfig = false;
 		if(resolvedZoneSignaturesPath.empty())
 		{
-			UERROR("Zone signatures JSON is required. Set %s or make zone_signatures.json available in the working directory, working-directory data folder, or installed share/rtabmap/data.",
+			UWARN("Zone signatures JSON was not found. Falling back to built-in zone definitions. Set %s or make zone_signatures.json available in the working directory, working-directory data folder, or installed share/rtabmap/data to override them.",
 				Parameters::kRtabmapZoneSignaturesPath().c_str());
-			return false;
+			loadedConfig = createDefaultZoneSignaturesConfig();
+			usingFallbackZoneConfig = true;
 		}
-
-		ZoneSignaturesConfig loadedConfig;
-		if(!loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
+		else if(!loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
 		{
-			UERROR("Zone initialization aborted because the JSON configuration could not be loaded from \"%s\".", resolvedZoneSignaturesPath.c_str());
-			return false;
+			UWARN("Zone initialization could not load \"%s\". Falling back to built-in zone definitions.", resolvedZoneSignaturesPath.c_str());
+			loadedConfig = createDefaultZoneSignaturesConfig();
+			resolvedZoneSignaturesPath.clear();
+			usingFallbackZoneConfig = true;
 		}
 
 		loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
@@ -1482,7 +1503,14 @@ bool Rtabmap::process(
 		zoneHistory.push_back(bootstrapZone);
 		activeSignatureIds.insert(zoneSignatures.at(bootstrapZone).begin(), zoneSignatures.at(bootstrapZone).end());
 
-		UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
+		if(usingFallbackZoneConfig)
+		{
+			UINFO("Loaded built-in fallback zone definitions.");
+		}
+		else
+		{
+			UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
+		}
 		UWARN("Zone definitions initialized:");
 		for(ZoneSignaturesMap::const_iterator iter = zoneSignatures.begin(); iter != zoneSignatures.end(); ++iter)
 		{
@@ -2998,7 +3026,7 @@ bool Rtabmap::process(
 							break;
 						}
 						
-						ULOGGER_WARN("Transferred %d signatures to LTM from zone %s", 
+						ULOGGER_WARN("Transferred %d signature(s) to LTM while retiring zone %s", 
 									(int)transferred.size(), oldestZone.c_str());
 						
 						// ★ 메모리 재계산
@@ -3036,26 +3064,21 @@ bool Rtabmap::process(
     {
         const auto& zoneIds = zoneSignatures.at(newZone);
 
-        // ★ 이미 해당 zone의 signature들이 WM에 모두 올라와 있는지 확인
-        bool needRetrieve = false;
+        // Only request signatures that are missing from working memory.
+        std::list<int> idsToRetrieve;
         const std::map<int, double> & workingMem = _memory->getWorkingMem();
         for(const auto & id : zoneIds)
         {
             if(workingMem.find(id) == workingMem.end())
             {
-                needRetrieve = true;
-                break;
+                idsToRetrieve.push_back(id);
             }
         }
 
-        if(needRetrieve)
+        if(!idsToRetrieve.empty())
         {
-            UWARN("retrieve******************");
-            ULOGGER_WARN("=== Retrieving %d signatures from zone: %s ===", 
-                        (int)zoneIds.size(), newZone.c_str());
-            
-            // ★ zoneIds를 std::list<int>로 변환
-            std::list<int> idsToRetrieve(zoneIds.begin(), zoneIds.end());
+            ULOGGER_WARN("=== Retrieving %d missing signature(s) for zone: %s (zone size=%d) ===", 
+                        (int)idsToRetrieve.size(), newZone.c_str(), (int)zoneIds.size());
 
             signaturesRetrieved = _memory->reactivateSignatures(
                 idsToRetrieve,
@@ -5046,7 +5069,6 @@ bool Rtabmap::process(
 	// Finalize statistics and log files
 	//==============================================================
 	int localGraphSize = 0;
-	removedSize = removedSize + signaturesRemoved.size();
 	if(_publishStats)
 	{
 		statistics_.addStatistic(Statistics::kTimingStatistics_creation(), timeStatsCreation*1000);

@@ -6702,7 +6702,7 @@ void Memory::enableWordsRef(const std::list<int> & signatureIds)
 			{
 				if(keys.at(i)>0)
 				{
-					if(_vwd->addWordRef(keys.at(i), (*j)->id()))
+					if(!_vwd->addWordRef(keys.at(i), (*j)->id()))
 					{
 						UERROR("Could not add word ref %d to node %d!?", keys.at(i), (*j)->id());
 					}
@@ -6791,8 +6791,12 @@ std::set<int> Memory::reactivateSignatures(const std::list<int> & ids, unsigned 
 		this->addSignatureToWmFromLTM(*i);
 	}
 	this->enableWordsRef(idsLoaded);
+	if(idsLoaded.size() != idsToLoad.size())
+	{
+		UWARN("Requested %d signature(s) from database, but only %d were reactivated.", (int)idsToLoad.size(), (int)idsLoaded.size());
+	}
 	UDEBUG("time = %fs", timer.ticks());
-	return std::set<int>(idsToLoad.begin(), idsToLoad.end());
+	return std::set<int>(idsLoaded.begin(), idsLoaded.end());
 }
 
 // return all non-null poses
