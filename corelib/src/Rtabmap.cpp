@@ -71,7 +71,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/TextureMesh.h>
 
 #include <stdlib.h>
+#include <algorithm>
 #include <set>
+#include <sstream>
+#include <vector>
 
 #define LOG_F "LogF.txt"
 #define LOG_I "LogI.txt"
@@ -103,39 +106,96 @@ struct ZoneSignaturesConfig
 	std::string initialZone;
 };
 
+void appendUniqueZoneSignaturesCandidate(std::vector<std::string> & candidates, const std::string & path)
+{
+	if(path.empty())
+	{
+		return;
+	}
+	if(std::find(candidates.begin(), candidates.end(), path) == candidates.end())
+	{
+		candidates.push_back(path);
+	}
+}
+
+void appendZoneSignaturesCandidate(std::vector<std::string> & candidates, const std::string & baseDir, const std::string & relativePath)
+{
+	if(baseDir.empty() || relativePath.empty())
+	{
+		return;
+	}
+	appendUniqueZoneSignaturesCandidate(candidates, baseDir + UDirectory::separator() + relativePath);
+}
+
+void appendInstalledZoneSignaturesCandidates(std::vector<std::string> & candidates, const char * envVarName, const std::string & relativePath)
+{
+	const char * envValue = getenv(envVarName);
+	if(!envValue || !envValue[0])
+	{
+		return;
+	}
+
+	std::stringstream stream(envValue);
+	std::string prefix;
+	while(std::getline(stream, prefix, ':'))
+	{
+		if(prefix.empty())
+		{
+			continue;
+		}
+		appendUniqueZoneSignaturesCandidate(
+			candidates,
+			prefix + UDirectory::separator() + "share" + UDirectory::separator() + "rtabmap" + UDirectory::separator() + relativePath);
+	}
+}
+
 std::string resolveZoneSignaturesPath(const std::string & configuredPath, const std::string & workingDir)
 {
+	std::vector<std::string> candidates;
+	std::string currentDir = UDirectory::currentDir(false);
+
 	if(!configuredPath.empty())
 	{
 		std::string expandedPath = uReplaceChar(configuredPath, '~', UDirectory::homeDir());
-		if(UFile::exists(expandedPath))
+		appendUniqueZoneSignaturesCandidate(candidates, expandedPath);
+		appendZoneSignaturesCandidate(candidates, workingDir, expandedPath);
+		if(currentDir != workingDir)
 		{
-			return expandedPath;
+			appendZoneSignaturesCandidate(candidates, currentDir, expandedPath);
 		}
 
-		if(!workingDir.empty())
+		for(std::vector<std::string>::const_iterator iter = candidates.begin(); iter != candidates.end(); ++iter)
 		{
-			std::string candidate = workingDir + UDirectory::separator() + expandedPath;
-			if(UFile::exists(candidate))
+			if(UFile::exists(*iter))
 			{
-				return candidate;
+				return *iter;
 			}
 		}
 		return expandedPath;
 	}
 
-	if(!workingDir.empty())
-	{
-		std::string candidate = workingDir + UDirectory::separator() + "zone_signatures.json";
-		if(UFile::exists(candidate))
-		{
-			return candidate;
-		}
-	}
+	const std::string defaultFile = "zone_signatures.json";
+	const std::string dataRelativeFile = std::string("data") + UDirectory::separator() + defaultFile;
 
-	if(UFile::exists("zone_signatures.json"))
+	appendZoneSignaturesCandidate(candidates, workingDir, defaultFile);
+	appendZoneSignaturesCandidate(candidates, workingDir, dataRelativeFile);
+	if(currentDir != workingDir)
 	{
-		return "zone_signatures.json";
+		appendZoneSignaturesCandidate(candidates, currentDir, defaultFile);
+		appendZoneSignaturesCandidate(candidates, currentDir, dataRelativeFile);
+	}
+	appendUniqueZoneSignaturesCandidate(candidates, defaultFile);
+	appendUniqueZoneSignaturesCandidate(candidates, dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "AMENT_PREFIX_PATH", dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "COLCON_PREFIX_PATH", dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "CMAKE_PREFIX_PATH", dataRelativeFile);
+
+	for(std::vector<std::string>::const_iterator iter = candidates.begin(); iter != candidates.end(); ++iter)
+	{
+		if(UFile::exists(*iter))
+		{
+			return *iter;
+		}
 	}
 
 	return "";
@@ -1400,7 +1460,7 @@ bool Rtabmap::process(
 
 		if(resolvedZoneSignaturesPath.empty())
 		{
-			UERROR("Zone signatures JSON is required. Set %s or place zone_signatures.json in the working directory.",
+			UERROR("Zone signatures JSON is required. Set %s or make zone_signatures.json available in the working directory, working-directory data folder, or installed share/rtabmap/data.",
 				Parameters::kRtabmapZoneSignaturesPath().c_str());
 			return false;
 		}
