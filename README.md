@@ -6,23 +6,23 @@ Instead of relying only on the default memory-management flow, it uses zone-to-s
 
 ## What Is Different From Basic RTAB-Map
 
-Basic RTAB-Map already loads and unloads signatures between working memory and long-term memory, but it does not make those decisions from an explicit zone-to-signature mapping.
-
 In this repository, the load/unload algorithm in `corelib/src/Rtabmap.cpp` is changed so that:
 
 - signatures are grouped by zone
 - the current zone drives which signatures should loaded
-- signatures from older inactive zones are unloaded when memory pressure grows
+- signatures from older zones are unloaded when memory pressure grows
 - the zone-signature mapping comes from `data/zone_signatures.json`
 
 ## How The Semantic Load/Unload Flow Works
 
-At a high level:
+![overview](overview.png)
 
-1. RTAB-Map loads zone-signature mappings from `data/zone_signatures.json`.
-2. `corelib/src/Rtabmap.cpp` determines the current zone.
-3. Signatures mapped to the current zone are loaded or reactivated as needed.
-4. Signatures from older inactive zones are unloaded when memory usage grows.
+We proposes a semantic zone-based map management approach to stabilize dense-map utilization under memory constraints. We associate keyframes with semantic indoor regions (e.g., rooms and corridors) and keyframe management at the semantic zone level prioritizes spatially relevant map content while respecting memory constraints. This reduces keyframe loading and unloading frequency and memory usage.
+
+
+
+*Why semantic zones? :*
+Semantic zones capture the functional structure of indoor spaces, enabling keyframe grouping that better reflects robot movement and revisitation behavior than purely geometric partitioning.
 
 ## Core Components
 
