@@ -1,3 +1,49 @@
+## Summary
+
+This repository is a derivative of RTAB-Map and changes signature load/unload behavior in `corelib/src/Rtabmap.cpp`.
+
+Instead of relying only on the default memory-management flow, it uses zone-to-signature mappings from `data/zone_signatures.json` to decide which signatures should be loaded or unloaded for the robot's current area.
+
+## What Is Different From Basic RTAB-Map
+
+Basic RTAB-Map already loads and unloads signatures between working memory and long-term memory, but it does not make those decisions from an explicit zone-to-signature mapping.
+
+In this repository, the load/unload algorithm in `corelib/src/Rtabmap.cpp` is changed so that:
+
+- signatures are grouped by zone
+- the current zone drives which signatures should loaded
+- signatures from older inactive zones are unloaded when memory pressure grows
+- the zone-signature mapping comes from `data/zone_signatures.json`
+
+## How The Semantic Load/Unload Flow Works
+
+At a high level:
+
+1. RTAB-Map loads zone-signature mappings from `data/zone_signatures.json`.
+2. `corelib/src/Rtabmap.cpp` determines the current zone.
+3. Signatures mapped to the current zone are loaded or reactivated as needed.
+4. Signatures from older inactive zones are unloaded when memory usage grows.
+
+## Core Components
+
+The main files for this repository-specific behavior are:
+
+- `corelib/src/Rtabmap.cpp`
+  - zone initialization
+  - zone transition handling
+  - oldest-zone unload policy
+- `corelib/include/rtabmap/core/Parameters.h`
+  - `Rtabmap/ZoneSignaturesPath` parameter definition
+- `data/zone_signatures.json`
+  - information for zone-signature mapping
+
+
+## Hospital Environment Used For Evaluation
+
+The repository includes a hospital environment asset used to evaluate the semantic zone policy.
+
+![Hospital environment](hospital_env.png)
+
 rtabmap
 =======
 
@@ -20,7 +66,6 @@ RTAB-Map library and standalone application.
 
  * For more information (e.g., papers, major updates), visit [RTAB-Map's home page](http://introlab.github.io/rtabmap).
  * For installation instructions and examples, visit [RTAB-Map's wiki](https://github.com/introlab/rtabmap/wiki).
- * For project-specific customizations in this fork, see [README.custom.md](README.custom.md).
 
 To use RTAB-Map under ROS, visit the [rtabmap](http://wiki.ros.org/rtabmap) page on the ROS wiki.
 
