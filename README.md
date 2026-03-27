@@ -20,6 +20,7 @@ RTAB-Map library and standalone application.
 
  * For more information (e.g., papers, major updates), visit [RTAB-Map's home page](http://introlab.github.io/rtabmap).
  * For installation instructions and examples, visit [RTAB-Map's wiki](https://github.com/introlab/rtabmap/wiki).
+ * For project-specific customizations in this fork, see [README.custom.md](README.custom.md).
 
 To use RTAB-Map under ROS, visit the [rtabmap](http://wiki.ros.org/rtabmap) page on the ROS wiki.
 
