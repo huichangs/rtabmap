@@ -400,11 +400,9 @@ private:
 	std::string _bootstrapZone;
 	std::string _loadedZoneSignaturesPath;
 	std::set<std::string> _activeZones;
-	std::set<int> _activeSignatureIds;
 	int _removedSize;
 	int _retrievedSize;
 	std::deque<std::string> _zoneHistory;
-	bool _initialRemoved;
 	std::set<std::string> _previousMatchedZones;
 	bool _zoneUpdated;
 

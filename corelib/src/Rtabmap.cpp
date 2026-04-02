@@ -532,11 +532,9 @@ void Rtabmap::resetSemanticZoneRuntimeState()
 	_bootstrapZone.clear();
 	_loadedZoneSignaturesPath.clear();
 	_activeZones.clear();
-	_activeSignatureIds.clear();
 	_removedSize = 0;
 	_retrievedSize = 0;
 	_zoneHistory.clear();
-	_initialRemoved = false;
 	_previousMatchedZones.clear();
 	_zoneUpdated = false;
 }
@@ -1493,7 +1491,6 @@ bool Rtabmap::process(
 
 		_activeZones.insert(_bootstrapZone);
 		_zoneHistory.push_back(_bootstrapZone);
-		_activeSignatureIds.insert(_zoneSignatures.at(_bootstrapZone).begin(), _zoneSignatures.at(_bootstrapZone).end());
 
 		if(usingFallbackZoneConfig)
 		{
