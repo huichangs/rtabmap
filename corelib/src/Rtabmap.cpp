@@ -2961,6 +2961,20 @@ bool Rtabmap::process(
 			UWARN("Zone %s not found in zoneSignatures", iter->c_str());
 		}
 	}
+	auto collectMissingZoneIds = [this, &matchedZoneIds]() -> std::list<int>
+	{
+		std::list<int> ids;
+		const std::map<int, double> & workingMem = _memory->getWorkingMem();
+		for(std::set<int>::const_iterator iter = matchedZoneIds.begin(); iter != matchedZoneIds.end(); ++iter)
+		{
+			if(workingMem.find(*iter) == workingMem.end())
+			{
+				ids.push_back(*iter);
+			}
+		}
+		return ids;
+	};
+	std::list<int> idsToRetrieve = collectMissingZoneIds();
 
 	// ============================================================
     // ★ RETRIEVE 전 메모리 검증 및 unload (forget 수행)
@@ -3005,20 +3019,22 @@ bool Rtabmap::process(
 		if(_maxMemoryAllowed != 0)
 		{
 			size_t currentWMSize = _memory->getWorkingMem().size();
-			size_t matchedZoneSize = matchedZoneIds.size();
-			size_t totalAfterRetrieve = currentWMSize + matchedZoneSize;  // ★ 핵심!
-			
+			size_t matchedZoneUnionSize = matchedZoneIds.size();
+			size_t missingZoneLoadSize = idsToRetrieve.size();
+			size_t totalAfterRetrieve = currentWMSize + missingZoneLoadSize;
+
 			ULOGGER_INFO("Memory validation on zone update:");
 			ULOGGER_INFO("  Current WM size: %d", (int)currentWMSize);
-			ULOGGER_INFO("  Matched zones [%s] size: %d", summarizeZoneList(matchedZones).c_str(), (int)matchedZoneSize);
+			ULOGGER_INFO("  Matched zones [%s] union size: %d", summarizeZoneList(matchedZones).c_str(), (int)matchedZoneUnionSize);
+			ULOGGER_INFO("  Missing signatures to load: %d", (int)missingZoneLoadSize);
 			ULOGGER_INFO("  Total after retrieve: %d", (int)totalAfterRetrieve);
 			ULOGGER_INFO("  Max allowed: %d", _maxMemoryAllowed);
 			
-			// ★ 현재 WM + 새 zone이 메모리 초과하면 oldest zone 제거
+			// ★ 현재 WM + 실제 missing signature load가 메모리 초과하면 oldest zone 제거
 			if(totalAfterRetrieve > _maxMemoryAllowed)
 			{
-				ULOGGER_WARN("WM + matched zones will exceed! Unloading oldest zones...");
-				
+				ULOGGER_WARN("WM + missing zone signatures will exceed! Unloading oldest zones...");
+
 				while(totalAfterRetrieve > _maxMemoryAllowed && zoneHistory.size() > 1)
 				{
 					std::string oldestZone = zoneHistory.front();
@@ -3029,23 +3045,30 @@ bool Rtabmap::process(
 					// ★ activeZones에서 oldest zone 제거
 					activeZones.erase(oldestZone);
 					
-					// ★ 보호할 signature들: 현재 active zone만!
-					std::set<int> immunizedLocationsSet;
-					
-					ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
-					for(const auto& zone : activeZones) {
-						if(zoneSignatures.find(zone) != zoneSignatures.end()) {
-							const auto& ids = zoneSignatures.at(zone);
-							immunizedLocationsSet.insert(ids.begin(), ids.end());
-							ULOGGER_INFO("  Zone %s: %d signatures protected", 
+						// ★ 보호할 signature들: 현재 active zone만!
+						std::set<int> immunizedLocationsSet;
+
+						ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
+						for(const auto& zone : activeZones) {
+							if(zoneSignatures.find(zone) != zoneSignatures.end()) {
+								const auto& ids = zoneSignatures.at(zone);
+								immunizedLocationsSet.insert(ids.begin(), ids.end());
+								ULOGGER_INFO("  Zone %s: %d signatures protected",
 										zone.c_str(), (int)ids.size());
+							}
 						}
-					}
-					
-					// 현재 위치도 보호
-					if(_lastLocalizationNodeId > 0) {
-						immunizedLocationsSet.insert(_lastLocalizationNodeId);
-					}
+
+						// Keep the current retrieval target protected even on overlap revisits
+						// where the matched zone may already be old in zoneHistory.
+						size_t protectedBeforeCurrentZones = immunizedLocationsSet.size();
+						immunizedLocationsSet.insert(matchedZoneIds.begin(), matchedZoneIds.end());
+						ULOGGER_INFO("  Current matched zones protect %d additional signature(s)",
+								(int)(immunizedLocationsSet.size() - protectedBeforeCurrentZones));
+
+						// 현재 위치도 보호
+						if(_lastLocalizationNodeId > 0) {
+							immunizedLocationsSet.insert(_lastLocalizationNodeId);
+						}
 					
 					ULOGGER_INFO("Total protected: %d", (int)immunizedLocationsSet.size());
 					
@@ -3067,7 +3090,7 @@ bool Rtabmap::process(
 						
 						// ★ 메모리 재계산
 						currentWMSize = _memory->getWorkingMem().size();
-						totalAfterRetrieve = currentWMSize + matchedZoneSize;  // ★ 새 zone size 더함!
+						totalAfterRetrieve = currentWMSize + missingZoneLoadSize;
 					}
 					
 					ULOGGER_WARN("After unload - WM: %d, Total: %d / Max: %d", 
@@ -3076,13 +3099,14 @@ bool Rtabmap::process(
 				
 				// ★ 최종 확인
 				if(totalAfterRetrieve > _maxMemoryAllowed) {
-					UWARN("FINAL WARNING: WM + matched zones still exceeds max!");
+					UWARN("FINAL WARNING: WM + missing zone signatures still exceeds max!");
 					UWARN("  Current WM: %d", (int)currentWMSize);
-					UWARN("  Matched zones: %d", (int)matchedZoneSize);
+					UWARN("  Matched zone union: %d", (int)matchedZoneUnionSize);
+					UWARN("  Missing signatures: %d", (int)missingZoneLoadSize);
 					UWARN("  Total: %d / Max: %d", (int)totalAfterRetrieve, _maxMemoryAllowed);
 				} else {
-					ULOGGER_WARN("Memory safe - WM: %d + matched zones: %d = %d / Max: %d", 
-								(int)currentWMSize, (int)matchedZoneSize, 
+						ULOGGER_WARN("Memory safe - WM: %d + missing signatures: %d = %d / Max: %d",
+								(int)currentWMSize, (int)missingZoneLoadSize,
 								(int)totalAfterRetrieve, _maxMemoryAllowed);
 				}
 			}
@@ -3098,16 +3122,8 @@ bool Rtabmap::process(
     
     if(!matchedZones.empty())
     {
-        // Only request signatures that are missing from working memory.
-        std::list<int> idsToRetrieve;
-        const std::map<int, double> & workingMem = _memory->getWorkingMem();
-        for(std::set<int>::const_iterator iter = matchedZoneIds.begin(); iter != matchedZoneIds.end(); ++iter)
-        {
-            if(workingMem.find(*iter) == workingMem.end())
-            {
-                idsToRetrieve.push_back(*iter);
-            }
-        }
+        // Re-check working memory after any unloads so retrieval stays aligned with the current state.
+        idsToRetrieve = collectMissingZoneIds();
 
         if(!idsToRetrieve.empty())
         {
