@@ -3044,31 +3044,31 @@ bool Rtabmap::process(
 					
 					// ★ activeZones에서 oldest zone 제거
 					activeZones.erase(oldestZone);
-					
-						// ★ 보호할 signature들: 현재 active zone만!
-						std::set<int> immunizedLocationsSet;
 
-						ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
-						for(const auto& zone : activeZones) {
-							if(zoneSignatures.find(zone) != zoneSignatures.end()) {
-								const auto& ids = zoneSignatures.at(zone);
-								immunizedLocationsSet.insert(ids.begin(), ids.end());
-								ULOGGER_INFO("  Zone %s: %d signatures protected",
-										zone.c_str(), (int)ids.size());
-							}
+					// ★ 보호할 signature들: remaining active zones + current matched zones
+					std::set<int> immunizedLocationsSet;
+
+					ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
+					for(const auto& zone : activeZones) {
+						if(zoneSignatures.find(zone) != zoneSignatures.end()) {
+							const auto& ids = zoneSignatures.at(zone);
+							immunizedLocationsSet.insert(ids.begin(), ids.end());
+							ULOGGER_INFO("  Zone %s: %d signatures protected",
+									zone.c_str(), (int)ids.size());
 						}
+					}
 
-						// Keep the current retrieval target protected even on overlap revisits
-						// where the matched zone may already be old in zoneHistory.
-						size_t protectedBeforeCurrentZones = immunizedLocationsSet.size();
-						immunizedLocationsSet.insert(matchedZoneIds.begin(), matchedZoneIds.end());
-						ULOGGER_INFO("  Current matched zones protect %d additional signature(s)",
-								(int)(immunizedLocationsSet.size() - protectedBeforeCurrentZones));
+					// Keep the current retrieval target protected even on overlap revisits
+					// where the matched zone may already be old in zoneHistory.
+					size_t protectedBeforeCurrentZones = immunizedLocationsSet.size();
+					immunizedLocationsSet.insert(matchedZoneIds.begin(), matchedZoneIds.end());
+					ULOGGER_INFO("  Current matched zones protect %d additional signature(s)",
+							(int)(immunizedLocationsSet.size() - protectedBeforeCurrentZones));
 
-						// 현재 위치도 보호
-						if(_lastLocalizationNodeId > 0) {
-							immunizedLocationsSet.insert(_lastLocalizationNodeId);
-						}
+					// 현재 위치도 보호
+					if(_lastLocalizationNodeId > 0) {
+						immunizedLocationsSet.insert(_lastLocalizationNodeId);
+					}
 					
 					ULOGGER_INFO("Total protected: %d", (int)immunizedLocationsSet.size());
 					
@@ -3105,9 +3105,9 @@ bool Rtabmap::process(
 					UWARN("  Missing signatures: %d", (int)missingZoneLoadSize);
 					UWARN("  Total: %d / Max: %d", (int)totalAfterRetrieve, _maxMemoryAllowed);
 				} else {
-						ULOGGER_WARN("Memory safe - WM: %d + missing signatures: %d = %d / Max: %d",
-								(int)currentWMSize, (int)missingZoneLoadSize,
-								(int)totalAfterRetrieve, _maxMemoryAllowed);
+					ULOGGER_WARN("Memory safe - WM: %d + missing signatures: %d = %d / Max: %d",
+							(int)currentWMSize, (int)missingZoneLoadSize,
+							(int)totalAfterRetrieve, _maxMemoryAllowed);
 				}
 			}
 		}
