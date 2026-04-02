@@ -37,6 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/ProgressState.h"
 
 #include <opencv2/core/core.hpp>
+#include <deque>
 #include <list>
 #include <stack>
 #include <set>
@@ -268,6 +269,7 @@ private:
 	bool computePath(int targetNode, std::map<int, Transform> nodes, const std::multimap<int, rtabmap::Link> & constraints);
 
 	void createGlobalScanMap();
+	void resetSemanticZoneRuntimeState();
 
 	void setupLogFiles(bool overwrite = false);
 	void flushStatisticLogs();
@@ -392,6 +394,19 @@ private:
 	Transform _pathTransformToGoal;
 	int _pathStuckCount;
 	float _pathStuckDistance;
+
+	bool _zoneInitialized;
+	std::map<std::string, std::set<int> > _zoneSignatures;
+	std::string _bootstrapZone;
+	std::string _loadedZoneSignaturesPath;
+	std::set<std::string> _activeZones;
+	std::set<int> _activeSignatureIds;
+	int _removedSize;
+	int _retrievedSize;
+	std::deque<std::string> _zoneHistory;
+	bool _initialRemoved;
+	std::set<std::string> _previousMatchedZones;
+	bool _zoneUpdated;
 
 #ifdef RTABMAP_PYTHON
 	PythonInterface * _python;

@@ -389,6 +389,7 @@ Rtabmap::Rtabmap() :
 	,_python(new PythonInterface())
 #endif
 {
+	resetSemanticZoneRuntimeState();
 }
 
 Rtabmap::~Rtabmap() {
@@ -524,9 +525,26 @@ void Rtabmap::flushStatisticLogs()
 	}
 }
 
+void Rtabmap::resetSemanticZoneRuntimeState()
+{
+	_zoneInitialized = false;
+	_zoneSignatures.clear();
+	_bootstrapZone.clear();
+	_loadedZoneSignaturesPath.clear();
+	_activeZones.clear();
+	_activeSignatureIds.clear();
+	_removedSize = 0;
+	_retrievedSize = 0;
+	_zoneHistory.clear();
+	_initialRemoved = false;
+	_previousMatchedZones.clear();
+	_zoneUpdated = false;
+}
+
 void Rtabmap::init(const ParametersMap & parameters, const std::string & databasePath, bool loadDatabaseParameters)
 {
 	UDEBUG("path=%s", databasePath.c_str());
+	resetSemanticZoneRuntimeState();
 	_databasePath = databasePath;
 	if(!_databasePath.empty())
 	{
@@ -670,6 +688,7 @@ void Rtabmap::init(const std::string & configFile, const std::string & databaseP
 void Rtabmap::close(bool databaseSaved, const std::string & ouputDatabasePath)
 {
 	UINFO("databaseSaved=%d", databaseSaved?1:0);
+	resetSemanticZoneRuntimeState();
 	_highestHypothesis = std::make_pair(0,0.0f);
 	_loopClosureHypothesis = std::make_pair(0,0.0f);
 	_lastProcessTime = 0.0;
@@ -1297,6 +1316,7 @@ void Rtabmap::exportPoses(const std::string & path, bool optimized, bool global,
 void Rtabmap::resetMemory()
 {
 	UDEBUG("");
+	resetSemanticZoneRuntimeState();
 	_highestHypothesis = std::make_pair(0,0.0f);
 	_loopClosureHypothesis = std::make_pair(0,0.0f);
 	_lastProcessTime = 0.0;
@@ -1444,35 +1464,10 @@ bool Rtabmap::process(
 	double timeJoiningTrash = 0;
 	double timeStatsCreation = 0;
 
-	// Zone state is loaded once and reloaded if the config path changes.
-	static bool zoneInitialized = false;
-	static ZoneSignaturesMap zoneSignatures;
-	static std::string bootstrapZone;
-	static std::string loadedZoneSignaturesPath;
-	static std::set<std::string> activeZones;
-	static std::set<int> activeSignatureIds;
-	static int removedSize = 0;
-	static int retrievedSize = 0;
-	static std::deque<std::string> zoneHistory;
-	static bool initialRemoved = false;
-	static std::set<std::string> previousMatchedZones;
-	static bool zoneUpdated = false;
-
 	std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
-	if(!zoneInitialized || resolvedZoneSignaturesPath.compare(loadedZoneSignaturesPath) != 0)
+	if(!_zoneInitialized || resolvedZoneSignaturesPath.compare(_loadedZoneSignaturesPath) != 0)
 	{
-		zoneSignatures.clear();
-		activeZones.clear();
-		activeSignatureIds.clear();
-		zoneHistory.clear();
-		bootstrapZone.clear();
-		loadedZoneSignaturesPath.clear();
-		removedSize = 0;
-		retrievedSize = 0;
-		initialRemoved = false;
-		previousMatchedZones.clear();
-		zoneUpdated = false;
-		zoneInitialized = false;
+		resetSemanticZoneRuntimeState();
 
 		ZoneSignaturesConfig loadedConfig;
 		bool usingFallbackZoneConfig = false;
@@ -1491,14 +1486,14 @@ bool Rtabmap::process(
 			usingFallbackZoneConfig = true;
 		}
 
-		loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
-		zoneSignatures = loadedConfig.zoneSignatures;
-		bootstrapZone = loadedConfig.initialZone;
-		previousMatchedZones.insert(bootstrapZone);
+		_loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
+		_zoneSignatures = loadedConfig.zoneSignatures;
+		_bootstrapZone = loadedConfig.initialZone;
+		_previousMatchedZones.insert(_bootstrapZone);
 
-		activeZones.insert(bootstrapZone);
-		zoneHistory.push_back(bootstrapZone);
-		activeSignatureIds.insert(zoneSignatures.at(bootstrapZone).begin(), zoneSignatures.at(bootstrapZone).end());
+		_activeZones.insert(_bootstrapZone);
+		_zoneHistory.push_back(_bootstrapZone);
+		_activeSignatureIds.insert(_zoneSignatures.at(_bootstrapZone).begin(), _zoneSignatures.at(_bootstrapZone).end());
 
 		if(usingFallbackZoneConfig)
 		{
@@ -1509,12 +1504,12 @@ bool Rtabmap::process(
 			UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
 		}
 		UWARN("Zone definitions initialized:");
-		for(ZoneSignaturesMap::const_iterator iter = zoneSignatures.begin(); iter != zoneSignatures.end(); ++iter)
+		for(ZoneSignaturesMap::const_iterator iter = _zoneSignatures.begin(); iter != _zoneSignatures.end(); ++iter)
 		{
 			UINFO("  Zone %s: %d signatures", iter->first.c_str(), (int)iter->second.size());
 		}
-		UINFO("Bootstrap zone set to %s", bootstrapZone.c_str());
-		zoneInitialized = true;
+		UINFO("Bootstrap zone set to %s", _bootstrapZone.c_str());
+		_zoneInitialized = true;
 	}
 	float hypothesisRatio = 0.0f; // Only used for statistics
 	bool rejectedLoopClosure = false;
@@ -2924,26 +2919,26 @@ bool Rtabmap::process(
 		appendMatchedZone("R3", x <= -41.0f);
 
 		std::set<std::string> matchedZoneSet(matchedZones.begin(), matchedZones.end());
-		if(!matchedZones.empty() && matchedZoneSet != previousMatchedZones)
+		if(!matchedZones.empty() && matchedZoneSet != _previousMatchedZones)
 		{
 			UWARN("Zone set changed: [%s] -> [%s] at (%.2f, %.2f)",
-				summarizeZoneSet(previousMatchedZones).c_str(),
+				summarizeZoneSet(_previousMatchedZones).c_str(),
 				summarizeZoneList(matchedZones).c_str(),
 				x,
 				y);
 
-			previousMatchedZones = matchedZoneSet;
-			zoneUpdated = true;
+			_previousMatchedZones = matchedZoneSet;
+			_zoneUpdated = true;
 		}
 
 		// Keep every currently matched zone active, even if the overlap set itself
-		// didn't change and one of the zones was previously retired from activeZones.
+		// didn't change and one of the zones was previously retired from _activeZones.
 		for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
 		{
-			if(activeZones.insert(*iter).second)
+			if(_activeZones.insert(*iter).second)
 			{
-				zoneHistory.push_back(*iter);
-				zoneUpdated = true;
+				_zoneHistory.push_back(*iter);
+				_zoneUpdated = true;
 				UINFO("Added new zone to active: %s", iter->c_str());
 			}
 		}
@@ -2951,8 +2946,8 @@ bool Rtabmap::process(
 
 	for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
 	{
-		ZoneSignaturesMap::const_iterator zoneIter = zoneSignatures.find(*iter);
-		if(zoneIter != zoneSignatures.end())
+		ZoneSignaturesMap::const_iterator zoneIter = _zoneSignatures.find(*iter);
+		if(zoneIter != _zoneSignatures.end())
 		{
 			matchedZoneIds.insert(zoneIter->second.begin(), zoneIter->second.end());
 		}
@@ -2980,21 +2975,21 @@ bool Rtabmap::process(
     // ★ RETRIEVE 전 메모리 검증 및 unload (forget 수행)
     // ============================================================
     
-		if(!initialRemoved){
+		if(!_initialRemoved){
 			if(_maxMemoryAllowed != 0)
 			{
 				int currentWMSize = (int)_memory->getWorkingMem().size();
-				int totalAfterRetrieve = currentWMSize + (int)activeSignatureIds.size();
+				int totalAfterRetrieve = currentWMSize + (int)_activeSignatureIds.size();
 				ULOGGER_WARN("Initial Unloading");
 				while(totalAfterRetrieve > (int)_maxMemoryAllowed){
-					ZoneSignaturesMap::const_iterator bootstrapZoneIter = zoneSignatures.find(bootstrapZone);
-					if(bootstrapZoneIter == zoneSignatures.end())
+					ZoneSignaturesMap::const_iterator bootstrapZoneIter = _zoneSignatures.find(_bootstrapZone);
+					if(bootstrapZoneIter == _zoneSignatures.end())
 					{
-						UWARN("Bootstrap zone \"%s\" is not defined, skipping initial unloading.", bootstrapZone.c_str());
+						UWARN("Bootstrap zone \"%s\" is not defined, skipping initial unloading.", _bootstrapZone.c_str());
 						break;
 					}
 					std::list<int> transferred = _memory->forget(bootstrapZoneIter->second);
-					removedSize += (int)transferred.size();
+					_removedSize += (int)transferred.size();
 
 					if(transferred.empty()) {
 						UWARN("No more signatures can be removed! Memory still exceeded: %d > %d", 
@@ -3003,16 +2998,16 @@ bool Rtabmap::process(
 					}
 
 					currentWMSize = (int)_memory->getWorkingMem().size();
-					totalAfterRetrieve = currentWMSize + (int)activeSignatureIds.size();
+					totalAfterRetrieve = currentWMSize + (int)_activeSignatureIds.size();
 							
 					ULOGGER_INFO("After forget - WM: %d, Total: %d / Max: %d", 
 								currentWMSize, totalAfterRetrieve, _maxMemoryAllowed);
 				}
 			}
 
-			initialRemoved = true;
+			_initialRemoved = true;
 		}
-    if(zoneUpdated)
+    if(_zoneUpdated)
 	{
 		ULOGGER_WARN("Zone updated - processing memory management");
 		
@@ -3035,23 +3030,23 @@ bool Rtabmap::process(
 			{
 				ULOGGER_WARN("WM + missing zone signatures will exceed! Unloading oldest zones...");
 
-				while(totalAfterRetrieve > _maxMemoryAllowed && zoneHistory.size() > 1)
+				while(totalAfterRetrieve > _maxMemoryAllowed && _zoneHistory.size() > 1)
 				{
-					std::string oldestZone = zoneHistory.front();
-					zoneHistory.pop_front();
+					std::string oldestZone = _zoneHistory.front();
+					_zoneHistory.pop_front();
 					
 					ULOGGER_WARN("Unloading zone: %s", oldestZone.c_str());
 					
-					// ★ activeZones에서 oldest zone 제거
-					activeZones.erase(oldestZone);
+					// ★ _activeZones에서 oldest zone 제거
+					_activeZones.erase(oldestZone);
 
 					// ★ 보호할 signature들: remaining active zones + current matched zones
 					std::set<int> immunizedLocationsSet;
 
 					ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
-					for(const auto& zone : activeZones) {
-						if(zoneSignatures.find(zone) != zoneSignatures.end()) {
-							const auto& ids = zoneSignatures.at(zone);
+					for(const auto& zone : _activeZones) {
+						if(_zoneSignatures.find(zone) != _zoneSignatures.end()) {
+							const auto& ids = _zoneSignatures.at(zone);
 							immunizedLocationsSet.insert(ids.begin(), ids.end());
 							ULOGGER_INFO("  Zone %s: %d signatures protected",
 									zone.c_str(), (int)ids.size());
@@ -3077,7 +3072,7 @@ bool Rtabmap::process(
 					std::list<int> transferred;
 					while(totalAfterRetrieve > _maxMemoryAllowed){
 						transferred = _memory->forget(immunizedLocationsSet);
-						removedSize += transferred.size();
+						_removedSize += transferred.size();
 						signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
 						
 						if(transferred.empty()) {
@@ -3112,7 +3107,7 @@ bool Rtabmap::process(
 			}
 		}
 		
-		zoneUpdated = false;
+		_zoneUpdated = false;
 	}
 
     
@@ -4742,7 +4737,7 @@ bool Rtabmap::process(
 			UINFO("Set map correction = %s", _mapCorrection.prettyPrint().c_str());
 			statistics_.setLocalizationCovariance(_localizationCovariance);
 
-			retrievedSize = retrievedSize + (float)signaturesRetrieved.size();
+			_retrievedSize = _retrievedSize + (float)signaturesRetrieved.size();
 			// timings...
 			statistics_.addStatistic(Statistics::kTimingMemory_update(), timeMemoryUpdate*1000);
 			statistics_.addStatistic(Statistics::kTimingNeighbor_link_refining(), timeNeighborLinkRefining*1000);
@@ -4760,7 +4755,7 @@ bool Rtabmap::process(
 			statistics_.addStatistic(Statistics::kTimingCleaning_neighbors(), timeCleaningNeighbors*1000);
 
 			// retrieval
-			statistics_.addStatistic(Statistics::kMemorySignatures_retrieved(), retrievedSize);
+			statistics_.addStatistic(Statistics::kMemorySignatures_retrieved(), _retrievedSize);
 
 			// Feature specific parameters
 			statistics_.addStatistic(Statistics::kKeypointDictionary_size(), dictionarySize);
@@ -5131,7 +5126,7 @@ bool Rtabmap::process(
 		statistics_.addStatistic(Statistics::kTimingMemory_cleanup(), timeMemoryCleanup*1000);
 
 		// Transfer
-		statistics_.addStatistic(Statistics::kMemorySignatures_removed(), removedSize);
+		statistics_.addStatistic(Statistics::kMemorySignatures_removed(), _removedSize);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_globally(), immunizedGlobally);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_locally(), immunizedLocally);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_locally_max(), maxLocalLocationsImmunized);
@@ -5345,7 +5340,7 @@ bool Rtabmap::process(
 		std::string logI = uFormat("%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
 									_loopClosureHypothesis.first,
 									_highestHypothesis.first,
-									removedSize,
+									_removedSize,
 									0,
 									refWordsCount,
 									dictionarySize,
