@@ -2853,7 +2853,8 @@ bool Rtabmap::process(
     UTimer timerReactivations;
 
 	std::vector<std::string> matchedZones;
-	std::set<int> matchedZoneIds;
+	std::vector<std::string> retrievalZones;
+	std::set<int> retrievalZoneIds;
 	auto appendMatchedZone = [&matchedZones](const std::string & zoneName, bool condition)
 	{
 		if(condition)
@@ -2897,70 +2898,109 @@ bool Rtabmap::process(
 		}
 		return summary;
 	};
+	Transform currentZonePose;
+	bool hasCurrentZonePose = false;
+	bool missingZonePoseForClassification = false;
     
     // ★ 현재 위치 기반 zone 업데이트
-    if(!_optimizedPoses.empty() && _memory->getLastWorkingSignature())
+    if(_memory->getLastWorkingSignature())
 	{
 		int lastSignatureId = _memory->getLastWorkingSignature()->id();
-		Transform currentPose = uValue(_optimizedPoses, lastSignatureId, Transform());
-		
-		float x = currentPose.x();
-		float y = currentPose.y();
-		
-		// Overlapping regions intentionally activate every matching zone.
-		appendMatchedZone("L1", x >= -18.0f && x <= 10.0f && y <= 4.0f);
-		appendMatchedZone("H1", y >= 2.0f && x <= 12.0f && x >= 6.0f);
-		appendMatchedZone("H2", x <= -19.0f && x >= -35.0f && y >= 6.0f);
-		appendMatchedZone("C4", x <= -35.0f && x >= -41.0f);
-		appendMatchedZone("C3", x <= -16.0f && y <= 6.0f);
-		appendMatchedZone("C2", x <= 8.0f && x >= -25.0f && y >= 8.0f);
-		appendMatchedZone("R13", x <= -15.0f && x >= -25.0f && y >= 8.7f);
-		appendMatchedZone("R21", x >= 1.0f && x <=7.0f && y >= 8.0f);
-		appendMatchedZone("R3", x <= -41.0f);
-
-		std::set<std::string> matchedZoneSet(matchedZones.begin(), matchedZones.end());
-		if(!matchedZones.empty() && matchedZoneSet != _previousMatchedZones)
+		std::map<int, Transform>::const_iterator optimizedPoseIter = _optimizedPoses.find(lastSignatureId);
+		if(optimizedPoseIter != _optimizedPoses.end() && !optimizedPoseIter->second.isNull())
 		{
-			UWARN("Zone set changed: [%s] -> [%s] at (%.2f, %.2f)",
-				summarizeZoneSet(_previousMatchedZones).c_str(),
-				summarizeZoneList(matchedZones).c_str(),
-				x,
-				y);
+			currentZonePose = optimizedPoseIter->second;
+			hasCurrentZonePose = true;
+			float x = currentZonePose.x();
+			float y = currentZonePose.y();
 
-			_previousMatchedZones = matchedZoneSet;
-			_zoneUpdated = true;
-		}
+			// Overlapping regions intentionally activate every matching zone.
+			appendMatchedZone("L1", x >= -18.0f && x <= 10.0f && y <= 4.0f);
+			appendMatchedZone("H1", y >= 2.0f && x <= 12.0f && x >= 6.0f);
+			appendMatchedZone("H2", x <= -19.0f && x >= -35.0f && y >= 6.0f);
+			appendMatchedZone("C4", x <= -35.0f && x >= -41.0f);
+			appendMatchedZone("C3", x <= -16.0f && y <= 6.0f);
+			appendMatchedZone("C2", x <= 8.0f && x >= -25.0f && y >= 8.0f);
+			appendMatchedZone("R13", x <= -15.0f && x >= -25.0f && y >= 8.7f);
+			appendMatchedZone("R21", x >= 1.0f && x <=7.0f && y >= 8.0f);
+			appendMatchedZone("R3", x <= -41.0f);
 
-		// Keep every currently matched zone active, even if the overlap set itself
-		// didn't change and one of the zones was previously retired from _activeZones.
-		for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
-		{
-			if(_activeZones.insert(*iter).second)
+			std::set<std::string> matchedZoneSet(matchedZones.begin(), matchedZones.end());
+			if(!matchedZones.empty() && matchedZoneSet != _previousMatchedZones)
 			{
-				_zoneHistory.push_back(*iter);
 				_zoneUpdated = true;
-				UINFO("Added new zone to active: %s", iter->c_str());
+				UWARN("Zone set changed: [%s] -> [%s] at (%.2f, %.2f)",
+					summarizeZoneSet(_previousMatchedZones).c_str(),
+					summarizeZoneList(matchedZones).c_str(),
+					x,
+					y);
+
+				_previousMatchedZones = matchedZoneSet;
 			}
+
+			// Keep every currently matched zone active, even if the overlap set itself
+			// didn't change and one of the zones was previously retired from _activeZones.
+			for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
+			{
+				if(_activeZones.insert(*iter).second)
+				{
+					_zoneHistory.push_back(*iter);
+					_zoneUpdated = true;
+					UINFO("Added new zone to active: %s", iter->c_str());
+				}
+			}
+		}
+		else
+		{
+			missingZonePoseForClassification = true;
+			UWARN("Latest signature %d has no valid optimized pose for zone classification. Falling back to active zones if available.",
+				lastSignatureId);
+		}
+	}
+	else
+	{
+		missingZonePoseForClassification = true;
+		UWARN("Last working signature is unavailable for zone classification. Falling back to active zones if available.");
+	}
+
+	if(!matchedZones.empty())
+	{
+		retrievalZones = matchedZones;
+	}
+	else if(!_activeZones.empty())
+	{
+		retrievalZones.assign(_activeZones.begin(), _activeZones.end());
+		if(hasCurrentZonePose)
+		{
+			UINFO("Pose (%.2f, %.2f) is outside all configured zone bounds. Falling back to active zones [%s].",
+				currentZonePose.x(),
+				currentZonePose.y(),
+				summarizeZoneList(retrievalZones).c_str());
+		}
+		else if(missingZonePoseForClassification)
+		{
+			UINFO("Using active-zone fallback [%s] because no valid optimized pose was available for zone classification.",
+				summarizeZoneList(retrievalZones).c_str());
 		}
 	}
 
-	for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
+	for(std::vector<std::string>::const_iterator iter = retrievalZones.begin(); iter != retrievalZones.end(); ++iter)
 	{
 		ZoneSignaturesMap::const_iterator zoneIter = _zoneSignatures.find(*iter);
 		if(zoneIter != _zoneSignatures.end())
 		{
-			matchedZoneIds.insert(zoneIter->second.begin(), zoneIter->second.end());
+			retrievalZoneIds.insert(zoneIter->second.begin(), zoneIter->second.end());
 		}
 		else
 		{
 			UWARN("Zone %s not found in zoneSignatures", iter->c_str());
 		}
 	}
-	auto collectMissingZoneIds = [this, &matchedZoneIds]() -> std::list<int>
+	auto collectMissingZoneIds = [this, &retrievalZoneIds]() -> std::list<int>
 	{
 		std::list<int> ids;
 		const std::map<int, double> & workingMem = _memory->getWorkingMem();
-		for(std::set<int>::const_iterator iter = matchedZoneIds.begin(); iter != matchedZoneIds.end(); ++iter)
+		for(std::set<int>::const_iterator iter = retrievalZoneIds.begin(); iter != retrievalZoneIds.end(); ++iter)
 		{
 			if(workingMem.find(*iter) == workingMem.end())
 			{
@@ -3014,13 +3054,13 @@ bool Rtabmap::process(
 		if(_maxMemoryAllowed != 0)
 		{
 			size_t currentWMSize = _memory->getWorkingMem().size();
-			size_t matchedZoneUnionSize = matchedZoneIds.size();
+			size_t retrievalZoneUnionSize = retrievalZoneIds.size();
 			size_t missingZoneLoadSize = idsToRetrieve.size();
 			size_t totalAfterRetrieve = currentWMSize + missingZoneLoadSize;
 
 			ULOGGER_INFO("Memory validation on zone update:");
 			ULOGGER_INFO("  Current WM size: %d", (int)currentWMSize);
-			ULOGGER_INFO("  Matched zones [%s] union size: %d", summarizeZoneList(matchedZones).c_str(), (int)matchedZoneUnionSize);
+			ULOGGER_INFO("  Retrieval zones [%s] union size: %d", summarizeZoneList(retrievalZones).c_str(), (int)retrievalZoneUnionSize);
 			ULOGGER_INFO("  Missing signatures to load: %d", (int)missingZoneLoadSize);
 			ULOGGER_INFO("  Total after retrieve: %d", (int)totalAfterRetrieve);
 			ULOGGER_INFO("  Max allowed: %d", _maxMemoryAllowed);
@@ -3056,8 +3096,8 @@ bool Rtabmap::process(
 					// Keep the current retrieval target protected even on overlap revisits
 					// where the matched zone may already be old in zoneHistory.
 					size_t protectedBeforeCurrentZones = immunizedLocationsSet.size();
-					immunizedLocationsSet.insert(matchedZoneIds.begin(), matchedZoneIds.end());
-					ULOGGER_INFO("  Current matched zones protect %d additional signature(s)",
+					immunizedLocationsSet.insert(retrievalZoneIds.begin(), retrievalZoneIds.end());
+					ULOGGER_INFO("  Current retrieval zones protect %d additional signature(s)",
 							(int)(immunizedLocationsSet.size() - protectedBeforeCurrentZones));
 
 					// 현재 위치도 보호
@@ -3096,7 +3136,7 @@ bool Rtabmap::process(
 				if(totalAfterRetrieve > _maxMemoryAllowed) {
 					UWARN("FINAL WARNING: WM + missing zone signatures still exceeds max!");
 					UWARN("  Current WM: %d", (int)currentWMSize);
-					UWARN("  Matched zone union: %d", (int)matchedZoneUnionSize);
+					UWARN("  Retrieval zone union: %d", (int)retrievalZoneUnionSize);
 					UWARN("  Missing signatures: %d", (int)missingZoneLoadSize);
 					UWARN("  Total: %d / Max: %d", (int)totalAfterRetrieve, _maxMemoryAllowed);
 				} else {
@@ -3115,7 +3155,7 @@ bool Rtabmap::process(
     // ★ RETRIEVE 수행
     // ============================================================
     
-    if(!matchedZones.empty())
+    if(!retrievalZones.empty())
     {
         // Re-check working memory after any unloads so retrieval stays aligned with the current state.
         idsToRetrieve = collectMissingZoneIds();
@@ -3124,8 +3164,8 @@ bool Rtabmap::process(
         {
             ULOGGER_WARN("=== Retrieving %d missing signature(s) for zones: [%s] (zone union size=%d) ===",
                         (int)idsToRetrieve.size(),
-                        summarizeZoneList(matchedZones).c_str(),
-                        (int)matchedZoneIds.size());
+                        summarizeZoneList(retrievalZones).c_str(),
+                        (int)retrievalZoneIds.size());
 
             signaturesRetrieved = _memory->reactivateSignatures(
                 idsToRetrieve,
@@ -3148,12 +3188,12 @@ bool Rtabmap::process(
         }
         else
         {
-            ULOGGER_INFO("Zones [%s] already fully loaded in WM, skipping retrieval", summarizeZoneList(matchedZones).c_str());
+            ULOGGER_INFO("Zones [%s] already fully loaded in WM, skipping retrieval", summarizeZoneList(retrievalZones).c_str());
         }
     }
     else
     {
-        UWARN("No matched zone found for the current pose, skipping zone-based retrieval");
+        UWARN("No matched zone found and no active-zone fallback is available, skipping zone-based retrieval");
     }
 
 	timeReactivations = timerReactivations.ticks(); 
