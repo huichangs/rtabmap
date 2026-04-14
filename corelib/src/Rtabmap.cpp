@@ -837,7 +837,14 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRGBDProximityMergedScanCovFactor(), _proximityMergedScanCovFactor);
 	UASSERT(_proximityMergedScanCovFactor>0.0);
 
-	Parameters::parse(parameters, Parameters::kRtabmapZoneSignaturesPath(), _zoneSignaturesPath);
+	{
+		std::string previousPath = _zoneSignaturesPath;
+		Parameters::parse(parameters, Parameters::kRtabmapZoneSignaturesPath(), _zoneSignaturesPath);
+		if(_zoneSignaturesPath != previousPath)
+		{
+			_zoneInitialized = false;
+		}
+	}
 
 	bool optimizeFromGraphEndPrevious = _optimizeFromGraphEnd;
 	Parameters::parse(parameters, Parameters::kRGBDOptimizeFromGraphEnd(), _optimizeFromGraphEnd);
@@ -1462,9 +1469,9 @@ bool Rtabmap::process(
 	double timeJoiningTrash = 0;
 	double timeStatsCreation = 0;
 
-	std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
-	if(!_zoneInitialized || resolvedZoneSignaturesPath.compare(_loadedZoneSignaturesPath) != 0)
+	if(!_zoneInitialized)
 	{
+		std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
 		resetSemanticZoneRuntimeState();
 
 		ZoneSignaturesConfig loadedConfig;
