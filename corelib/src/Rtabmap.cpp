@@ -3016,126 +3016,18 @@ bool Rtabmap::process(
 	std::list<int> idsToRetrieve = collectMissingZoneIds();
 
 	// ============================================================
-	// ★ RETRIEVE 전 메모리 검증 및 unload (forget 수행)
+	// Pre-retrieval info (memory cleanup deferred to TRANSFER)
 	// ============================================================
-
-	bool requiresZoneMemoryValidation =
-		_maxMemoryAllowed != 0 &&
-		!retrievalZones.empty() &&
-		!idsToRetrieve.empty();
-	if(requiresZoneMemoryValidation)
+	if(_maxMemoryAllowed != 0 && !retrievalZones.empty() && !idsToRetrieve.empty())
 	{
-		if(_zoneUpdated)
-		{
-			ULOGGER_WARN("Zone updated - processing memory management");
-		}
-		else
-		{
-			ULOGGER_WARN("Zone retrieval requires memory validation before reactivation");
-		}
-		
 		size_t currentWMSize = _memory->getWorkingMem().size();
-		size_t retrievalZoneUnionSize = retrievalZoneIds.size();
 		size_t missingZoneLoadSize = idsToRetrieve.size();
-		size_t totalAfterRetrieve = currentWMSize + missingZoneLoadSize;
-
-		ULOGGER_INFO("Pre-retrieval memory validation:");
-		ULOGGER_INFO("  Current WM size: %d", (int)currentWMSize);
-		ULOGGER_INFO("  Retrieval zones [%s] union size: %d", summarizeZoneList(retrievalZones).c_str(), (int)retrievalZoneUnionSize);
-		ULOGGER_INFO("  Missing signatures to load: %d", (int)missingZoneLoadSize);
-		ULOGGER_INFO("  Total after retrieve: %d", (int)totalAfterRetrieve);
-		ULOGGER_INFO("  Max allowed: %d", _maxMemoryAllowed);
-
-		// ★ 현재 WM + 실제 missing signature load가 메모리 초과하면 oldest zone 제거
-		if(totalAfterRetrieve > _maxMemoryAllowed)
+		ULOGGER_INFO("Pre-retrieval memory info: WM=%d, missing=%d, total=%d / max=%d",
+				(int)currentWMSize, (int)missingZoneLoadSize,
+				(int)(currentWMSize + missingZoneLoadSize), _maxMemoryAllowed);
+		if(currentWMSize + missingZoneLoadSize > (size_t)_maxMemoryAllowed)
 		{
-			ULOGGER_WARN("WM + missing zone signatures will exceed! Unloading oldest zones...");
-
-			while(totalAfterRetrieve > _maxMemoryAllowed && _zoneHistory.size() > 1)
-			{
-				std::string oldestZone = _zoneHistory.front();
-				_zoneHistory.pop_front();
-
-				ULOGGER_WARN("Unloading zone: %s", oldestZone.c_str());
-
-				// ★ _activeZones에서 oldest zone 제거
-				_activeZones.erase(oldestZone);
-
-				// ★ 보호할 signature들: remaining active zones + current retrieval zones
-				std::set<int> immunizedLocationsSet;
-
-				ULOGGER_INFO("Building immunizedLocationsSet from remaining active zones:");
-				for(const auto& zone : _activeZones) {
-					if(_zoneSignatures.find(zone) != _zoneSignatures.end()) {
-						const auto& ids = _zoneSignatures.at(zone);
-						immunizedLocationsSet.insert(ids.begin(), ids.end());
-						ULOGGER_INFO("  Zone %s: %d signatures protected",
-								zone.c_str(), (int)ids.size());
-					}
-				}
-
-				// Keep the current retrieval target protected even on overlap revisits
-				// where the matched zone may already be old in zoneHistory.
-				size_t protectedBeforeCurrentZones = immunizedLocationsSet.size();
-				immunizedLocationsSet.insert(retrievalZoneIds.begin(), retrievalZoneIds.end());
-				ULOGGER_INFO("  Current retrieval zones protect %d additional signature(s)",
-						(int)(immunizedLocationsSet.size() - protectedBeforeCurrentZones));
-
-				// 현재 위치도 보호
-				if(_lastLocalizationNodeId > 0) {
-					immunizedLocationsSet.insert(_lastLocalizationNodeId);
-				}
-
-				ULOGGER_INFO("Total protected: %d", (int)immunizedLocationsSet.size());
-
-				// ★ forget() 호출
-				ULOGGER_INFO("Calling forget()...");
-				std::list<int> transferred;
-				while(totalAfterRetrieve > _maxMemoryAllowed){
-					transferred = _memory->forget(immunizedLocationsSet);
-					_removedSize += transferred.size();
-					signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
-					
-					if(transferred.empty()) {
-						UWARN("forget() returned empty - breaking to prevent infinite loop");
-						break;
-					}
-					
-					ULOGGER_WARN("Transferred %d signature(s) to LTM while retiring zone %s",
-								(int)transferred.size(), oldestZone.c_str());
-
-					// ★ 메모리 재계산
-					currentWMSize = _memory->getWorkingMem().size();
-					totalAfterRetrieve = currentWMSize + missingZoneLoadSize;
-				}
-
-				ULOGGER_WARN("After unload - WM: %d, Total: %d / Max: %d",
-							(int)currentWMSize, (int)totalAfterRetrieve, _maxMemoryAllowed);
-			}
-
-			// ★ 최종 확인
-			if(totalAfterRetrieve > _maxMemoryAllowed) {
-				UWARN("FINAL WARNING: WM + missing zone signatures still exceeds max!");
-				UWARN("  Current WM: %d", (int)currentWMSize);
-				UWARN("  Retrieval zone union: %d", (int)retrievalZoneUnionSize);
-				UWARN("  Missing signatures: %d", (int)missingZoneLoadSize);
-				UWARN("  Total: %d / Max: %d", (int)totalAfterRetrieve, _maxMemoryAllowed);
-			} else {
-				ULOGGER_WARN("Memory safe - WM: %d + missing signatures: %d = %d / Max: %d",
-						(int)currentWMSize, (int)missingZoneLoadSize,
-						(int)totalAfterRetrieve, _maxMemoryAllowed);
-			}
-		}
-	}
-	else if(_zoneUpdated)
-	{
-		if(retrievalZones.empty())
-		{
-			ULOGGER_INFO("Zone updated but there is no retrieval target, skipping pre-retrieval memory validation");
-		}
-		else
-		{
-			ULOGGER_INFO("Zone updated but all retrieval-zone signatures are already in WM, skipping pre-retrieval memory validation");
+			ULOGGER_WARN("WM will temporarily exceed max after retrieval — cleanup deferred to TRANSFER");
 		}
 	}
 	_zoneUpdated = false;
@@ -4968,50 +4860,85 @@ bool Rtabmap::process(
 
 
 	//============================================================
-	// TRANSFER
-	//============================================================
-	// If time allowed for the detection exceeds the limit of
-	// real-time, move the oldest signature with less frequency
-	// entry (from X oldest) from the short term memory to the
-	// long term memory.
+	// TRANSFER — zone-aware post-retrieval memory cleanup
 	//============================================================
 	double totalTime = timerTotal.ticks();
-	// ULOGGER_INFO("Total time processing = %fs...", totalTime);
-	// if((_maxTimeAllowed != 0 && totalTime*1000 > _maxTimeAllowed) ||
-	// (_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed))
-	// {
-	// 	ULOGGER_INFO("Removing old signatures because time limit is reached %f>%f or memory is reached %d>%d...", 
-	// 				totalTime*1000, _maxTimeAllowed, (int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
+	if(_maxMemoryAllowed != 0 && (int)_memory->getWorkingMem().size() > _maxMemoryAllowed)
+	{
+		ULOGGER_INFO("Post-retrieval TRANSFER: WM %d exceeds max %d, cleaning up...",
+					(int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
 
-	// 	immunizedLocations.insert(_lastLocalizationNodeId); // Keep latest localization in WM
+		// Build immunized set once from all active zones + retrieval target
+		std::set<int> immunizedLocationsSet;
+		for(std::set<std::string>::const_iterator zIt = _activeZones.begin(); zIt != _activeZones.end(); ++zIt)
+		{
+			ZoneSignaturesMap::const_iterator zoneIter = _zoneSignatures.find(*zIt);
+			if(zoneIter != _zoneSignatures.end())
+			{
+				immunizedLocationsSet.insert(zoneIter->second.begin(), zoneIter->second.end());
+			}
+		}
+		immunizedLocationsSet.insert(retrievalZoneIds.begin(), retrievalZoneIds.end());
+		if(_lastLocalizationNodeId > 0)
+		{
+			immunizedLocationsSet.insert(_lastLocalizationNodeId);
+		}
 
-	// 	const size_t targetWMSize = _maxMemoryAllowed;
-	// 	size_t lastRemovedCount = 0;
+		// Retire oldest zones while WM exceeds limit
+		while((int)_memory->getWorkingMem().size() > _maxMemoryAllowed && _zoneHistory.size() > 1)
+		{
+			std::string oldestZone = _zoneHistory.front();
+			_zoneHistory.pop_front();
+			_activeZones.erase(oldestZone);
 
-	// 	// 반복해서 forget 호출하여 WM 크기 감축
-	// 	while(_memory->getWorkingMem().size() > targetWMSize)
-	// 	{
-	// 		std::list<int> transferred = _memory->forget();
+			// Remove signatures unique to the retired zone from the immunized set
+			ZoneSignaturesMap::const_iterator retiredIter = _zoneSignatures.find(oldestZone);
+			if(retiredIter != _zoneSignatures.end())
+			{
+				for(std::set<int>::const_iterator idIt = retiredIter->second.begin(); idIt != retiredIter->second.end(); ++idIt)
+				{
+					// Only un-immunize if no other active zone protects this ID
+					bool protectedByOther = false;
+					for(std::set<std::string>::const_iterator azIt = _activeZones.begin(); azIt != _activeZones.end(); ++azIt)
+					{
+						ZoneSignaturesMap::const_iterator azIter = _zoneSignatures.find(*azIt);
+						if(azIter != _zoneSignatures.end() && azIter->second.count(*idIt))
+						{
+							protectedByOther = true;
+							break;
+						}
+					}
+					if(!protectedByOther && retrievalZoneIds.find(*idIt) == retrievalZoneIds.end())
+					{
+						immunizedLocationsSet.erase(*idIt);
+					}
+				}
+			}
 
-	// 		if(transferred.empty())
-	// 		{
-	// 			ULOGGER_WARN("No more signatures can be removed from WM despite exceeding memory limit.");
-	// 			break;  // 더 이상 제거할 노드가 없으면 무한루프 방지
-	// 		}
+			ULOGGER_INFO("TRANSFER: retired zone %s, immunized=%d, WM=%d",
+						oldestZone.c_str(), (int)immunizedLocationsSet.size(),
+						(int)_memory->getWorkingMem().size());
 
-	// 		signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
-	// 		lastRemovedCount = transferred.size();
+			std::list<int> transferred = _memory->forget(immunizedLocationsSet);
+			if(!transferred.empty())
+			{
+				_removedSize += transferred.size();
+				signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
+				if(!_someNodesHaveBeenTransferred)
+				{
+					_someNodesHaveBeenTransferred = true;
+				}
+			}
+			else
+			{
+				UWARN("TRANSFER: forget() returned empty after retiring zone %s", oldestZone.c_str());
+				break;
+			}
+		}
 
-	// 		ULOGGER_INFO("Transferred %zu signatures to LTM, current WM size=%d", 
-	// 					transferred.size(), (int)_memory->getWorkingMem().size());
-	// 	}
-
-	// 	// 이전에 제거된 적 없고, 이번에 제거했다면 플래그 업데이트
-	// 	if(!_someNodesHaveBeenTransferred && lastRemovedCount > 0)
-	// 	{
-	// 		_someNodesHaveBeenTransferred = true;
-	// 	}
-	// }
+		ULOGGER_INFO("TRANSFER complete: WM=%d / max=%d",
+					(int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
+	}
 	_lastProcessTime = totalTime;
 
 
