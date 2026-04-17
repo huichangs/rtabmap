@@ -171,6 +171,8 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->sift_label_gpu->setEnabled(false);
 	_ui->sift_doubleSpinBox_gaussianDiffThreshold->setEnabled(false);
 	_ui->sift_label_gaussianThreshold->setEnabled(false);
+	_ui->sift_doubleSpinBox_maxGaussianDiffThreshold->setEnabled(false);
+	_ui->sift_label_maxGaussianThreshold->setEnabled(false);
 	_ui->sift_checkBox_upscale->setEnabled(false);
 	_ui->sift_label_upscale->setEnabled(false);
 #endif
@@ -240,6 +242,9 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 #endif
 #ifndef RTABMAP_CUVSLAM
 	_ui->odom_strategy->setItemData(13, 0, Qt::UserRole - 1);
+#endif
+#ifndef RTABMAP_LIOSAM
+	_ui->odom_strategy->setItemData(14, 0, Qt::UserRole - 1);
 #endif
 
 #if CV_MAJOR_VERSION < 3
@@ -850,6 +855,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->comboBox_cameraImages_odomFormat, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->lineEdit_cameraImages_gt, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->comboBox_cameraImages_gtFormat, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->lineEdit_cameraImages_gt_transform, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->doubleSpinBox_maxPoseTimeDiff, SIGNAL(valueChanged(double)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->lineEdit_cameraImages_path_imu, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->lineEdit_cameraImages_imu_transform, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
@@ -1144,6 +1150,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->sift_checkBox_rootsift->setObjectName(Parameters::kSIFTRootSIFT().c_str());
 	_ui->sift_checkBox_gpu->setObjectName(Parameters::kSIFTGpu().c_str());
 	_ui->sift_doubleSpinBox_gaussianDiffThreshold->setObjectName(Parameters::kSIFTGaussianThreshold().c_str());
+	_ui->sift_doubleSpinBox_maxGaussianDiffThreshold->setObjectName(Parameters::kSIFTMaxGaussianThreshold().c_str());
 	_ui->sift_checkBox_upscale->setObjectName(Parameters::kSIFTUpscale().c_str());
 
 	//BRIEF descriptor
@@ -1693,6 +1700,22 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	// Odometry CuVSLAM
 	_ui->odom_cuvslam_multicam_mode->setObjectName(Parameters::kOdomCuVSLAMMulticamMode().c_str());
+
+	// Odometry LIO-SAM
+	_ui->lineEdit_OdomLIOSAMPath->setObjectName(Parameters::kOdomLIOSAMConfigPath().c_str());
+	connect(_ui->toolButton_OdomLIOSAMPath, SIGNAL(clicked()), this, SLOT(changeOdometryLIOSAMConfigPath()));
+	_ui->odom_liosam_sensor->setObjectName(Parameters::kOdomLIOSAMSensor().c_str());
+	_ui->odom_liosam_nscan->setObjectName(Parameters::kOdomLIOSAMNScan().c_str());
+	_ui->odom_liosam_horizon_scan->setObjectName(Parameters::kOdomLIOSAMHorizonScan().c_str());
+	_ui->odom_liosam_imu_acc_noise->setObjectName(Parameters::kOdomLIOSAMImuAccNoise().c_str());
+	_ui->odom_liosam_imu_gyr_noise->setObjectName(Parameters::kOdomLIOSAMImuGyrNoise().c_str());
+	_ui->odom_liosam_imu_acc_bias_n->setObjectName(Parameters::kOdomLIOSAMImuAccBiasN().c_str());
+	_ui->odom_liosam_imu_gyr_bias_n->setObjectName(Parameters::kOdomLIOSAMImuGyrBiasN().c_str());
+	_ui->odom_liosam_imu_gravity->setObjectName(Parameters::kOdomLIOSAMImuGravity().c_str());
+	_ui->odom_liosam_edge_threshold->setObjectName(Parameters::kOdomLIOSAMEdgeThreshold().c_str());
+	_ui->odom_liosam_surf_threshold->setObjectName(Parameters::kOdomLIOSAMSurfThreshold().c_str());
+	_ui->odom_liosam_linvar->setObjectName(Parameters::kOdomLIOSAMLinVar().c_str());
+	_ui->odom_liosam_angvar->setObjectName(Parameters::kOdomLIOSAMAngVar().c_str());
 
 	//StereoDense
 	_ui->comboBox_stereoDense_strategy->setObjectName(Parameters::kStereoDenseStrategy().c_str());
@@ -2360,6 +2383,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->comboBox_cameraImages_odomFormat->setCurrentIndex(0);
 		_ui->lineEdit_cameraImages_gt->setText("");
 		_ui->comboBox_cameraImages_gtFormat->setCurrentIndex(0);
+		_ui->lineEdit_cameraImages_gt_transform->setText("0 0 0 0 0 0");
 		_ui->doubleSpinBox_maxPoseTimeDiff->setValue(0.02);
 		_ui->lineEdit_cameraImages_path_imu->setText("");
 		_ui->lineEdit_cameraImages_imu_transform->setText("0 0 1 0 -1 0 1 0 0");
@@ -2894,6 +2918,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->comboBox_cameraImages_odomFormat->setCurrentIndex(settings.value("odom_format", _ui->comboBox_cameraImages_odomFormat->currentIndex()).toInt());
 	_ui->lineEdit_cameraImages_gt->setText(settings.value("gt_path", _ui->lineEdit_cameraImages_gt->text()).toString());
 	_ui->comboBox_cameraImages_gtFormat->setCurrentIndex(settings.value("gt_format", _ui->comboBox_cameraImages_gtFormat->currentIndex()).toInt());
+	_ui->lineEdit_cameraImages_gt_transform->setText(settings.value("gt_transform", _ui->lineEdit_cameraImages_gt_transform->text()).toString());
 	_ui->doubleSpinBox_maxPoseTimeDiff->setValue(settings.value("max_pose_time_diff", _ui->doubleSpinBox_maxPoseTimeDiff->value()).toDouble());
 
 	_ui->lineEdit_cameraImages_path_imu->setText(settings.value("imu_path", _ui->lineEdit_cameraImages_path_imu->text()).toString());
@@ -3514,6 +3539,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("odom_format",         _ui->comboBox_cameraImages_odomFormat->currentIndex());
 	settings.setValue("gt_path",             _ui->lineEdit_cameraImages_gt->text());
 	settings.setValue("gt_format",           _ui->comboBox_cameraImages_gtFormat->currentIndex());
+	settings.setValue("gt_transform",        _ui->lineEdit_cameraImages_gt_transform->text());
 	settings.setValue("max_pose_time_diff",  _ui->doubleSpinBox_maxPoseTimeDiff->value());
 	settings.setValue("imu_path",            _ui->lineEdit_cameraImages_path_imu->text());
 	settings.setValue("imu_local_transform", _ui->lineEdit_cameraImages_imu_transform->text());
@@ -5572,6 +5598,7 @@ void PreferencesDialog::updateOdometryStackedIndex(int index)
 	_ui->groupBox_odomOpenVINS->setVisible(index==10);
 	_ui->groupBox_odomOpen3D->setVisible(index==12);
 	_ui->groupBox_odomCuvslam->setVisible(index==13);
+	_ui->groupBox_odomLIOSAM->setVisible(index==14);
 }
 
 void PreferencesDialog::useOdomFeatures()
@@ -5674,6 +5701,23 @@ void PreferencesDialog::changeOdometryVINSFusionConfigPath()
 	if(!path.isEmpty())
 	{
 		_ui->lineEdit_OdomVinsFusionPath->setText(path);
+	}
+}
+
+void PreferencesDialog::changeOdometryLIOSAMConfigPath()
+{
+	QString path;
+	if(_ui->lineEdit_OdomLIOSAMPath->text().isEmpty())
+	{
+		path = QFileDialog::getOpenFileName(this, tr("LIO-SAM Config"), this->getWorkingDirectory(), tr("LIO-SAM config (*.yaml)"));
+	}
+	else
+	{
+		path = QFileDialog::getOpenFileName(this, tr("LIO-SAM Config"), _ui->lineEdit_OdomLIOSAMPath->text(), tr("LIO-SAM config (*.yaml)"));
+	}
+	if(!path.isEmpty())
+	{
+		_ui->lineEdit_OdomLIOSAMPath->setText(path);
 	}
 }
 
@@ -6532,6 +6576,15 @@ Transform PreferencesDialog::getLaserLocalTransform() const
 	}
 	return t;
 }
+Transform PreferencesDialog::getGroundTruthLocalTransform() const
+{
+	Transform t = Transform::fromString(_ui->lineEdit_cameraImages_gt_transform->text().replace("PI_2", QString::number(3.141592/2.0)).toStdString());
+	if(t.isNull())
+	{
+		return Transform::getIdentity();
+	}
+	return t;
+}
 
 QString PreferencesDialog::getIMUPath() const
 {
@@ -6898,7 +6951,7 @@ Camera * PreferencesDialog::createCamera(
 		((CameraRGBDImages*)camera)->setMaxFrames(_ui->spinBox_cameraRGBDImages_maxFrames->value());
 		((CameraRGBDImages*)camera)->setBayerMode(_ui->comboBox_cameraImages_bayerMode->currentIndex()-1);
 		((CameraRGBDImages*)camera)->setOdometryPath(_ui->lineEdit_cameraImages_odom->text().toStdString(), _ui->comboBox_cameraImages_odomFormat->currentIndex());
-		((CameraRGBDImages*)camera)->setGroundTruthPath(_ui->lineEdit_cameraImages_gt->text().toStdString(), _ui->comboBox_cameraImages_gtFormat->currentIndex());
+		((CameraRGBDImages*)camera)->setGroundTruthPath(_ui->lineEdit_cameraImages_gt->text().toStdString(), _ui->comboBox_cameraImages_gtFormat->currentIndex(), this->getGroundTruthLocalTransform());
 		((CameraRGBDImages*)camera)->setMaxPoseTimeDiff(_ui->doubleSpinBox_maxPoseTimeDiff->value());
 		((CameraRGBDImages*)camera)->setScanPath(
 						_ui->lineEdit_cameraImages_path_scans->text().isEmpty()?"":_ui->lineEdit_cameraImages_path_scans->text().append(QDir::separator()).toStdString(),
@@ -6944,7 +6997,7 @@ Camera * PreferencesDialog::createCamera(
 		((CameraStereoImages*)camera)->setMaxFrames(_ui->spinBox_cameraStereoImages_maxFrames->value());
 		((CameraStereoImages*)camera)->setBayerMode(_ui->comboBox_cameraImages_bayerMode->currentIndex()-1);
 		((CameraStereoImages*)camera)->setOdometryPath(_ui->lineEdit_cameraImages_odom->text().toStdString(), _ui->comboBox_cameraImages_odomFormat->currentIndex());
-		((CameraStereoImages*)camera)->setGroundTruthPath(_ui->lineEdit_cameraImages_gt->text().toStdString(), _ui->comboBox_cameraImages_gtFormat->currentIndex());
+		((CameraStereoImages*)camera)->setGroundTruthPath(_ui->lineEdit_cameraImages_gt->text().toStdString(), _ui->comboBox_cameraImages_gtFormat->currentIndex(), this->getGroundTruthLocalTransform());
 		((CameraStereoImages*)camera)->setMaxPoseTimeDiff(_ui->doubleSpinBox_maxPoseTimeDiff->value());
 		((CameraStereoImages*)camera)->setScanPath(
 						_ui->lineEdit_cameraImages_path_scans->text().isEmpty()?"":_ui->lineEdit_cameraImages_path_scans->text().append(QDir::separator()).toStdString(),
@@ -7144,7 +7197,8 @@ Camera * PreferencesDialog::createCamera(
 				_ui->comboBox_cameraImages_odomFormat->currentIndex());
 		((CameraImages*)camera)->setGroundTruthPath(
 				_ui->lineEdit_cameraImages_gt->text().toStdString(),
-				_ui->comboBox_cameraImages_gtFormat->currentIndex());
+				_ui->comboBox_cameraImages_gtFormat->currentIndex(),
+				this->getGroundTruthLocalTransform());
 		((CameraImages*)camera)->setMaxPoseTimeDiff(_ui->doubleSpinBox_maxPoseTimeDiff->value());
 		((CameraImages*)camera)->setScanPath(
 						_ui->lineEdit_cameraImages_path_scans->text().isEmpty()?"":_ui->lineEdit_cameraImages_path_scans->text().append(QDir::separator()).toStdString(),

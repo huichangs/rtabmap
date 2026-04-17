@@ -293,6 +293,7 @@ public:
 	double getSourceScanForceGroundNormalsUp() const;
 	Transform getSourceLocalTransform() const;    //Openni group
 	Transform getLaserLocalTransform() const; // directory images
+	Transform getGroundTruthLocalTransform() const; // directory images
 	Transform getIMULocalTransform() const; // directory images
 	QString getIMUPath() const;
 	int getIMURate() const;
@@ -370,6 +371,7 @@ private Q_SLOTS:
 	void changeOdometryORBSLAMVocabulary();
 	void changeOdometryOKVISConfigPath();
 	void changeOdometryVINSFusionConfigPath();
+	void changeOdometryLIOSAMConfigPath();
 	void changeOdometryOpenVINSLeftMask();
 	void changeOdometryOpenVINSRightMask();
 	void changeIcpPMConfigPath();
