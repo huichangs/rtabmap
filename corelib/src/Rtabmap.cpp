@@ -4863,7 +4863,7 @@ bool Rtabmap::process(
 	// TRANSFER — zone-aware post-retrieval memory cleanup
 	//============================================================
 	double totalTime = timerTotal.ticks();
-	if(_maxMemoryAllowed != 0 && (int)_memory->getWorkingMem().size() > _maxMemoryAllowed)
+	if(_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed)
 	{
 		ULOGGER_INFO("Post-retrieval TRANSFER: WM %d exceeds max %d, cleaning up...",
 					(int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
@@ -4885,7 +4885,7 @@ bool Rtabmap::process(
 		}
 
 		// Retire oldest zones while WM exceeds limit
-		while((int)_memory->getWorkingMem().size() > _maxMemoryAllowed && _zoneHistory.size() > 1)
+		while(_memory->getWorkingMem().size() > _maxMemoryAllowed && _zoneHistory.size() > 1)
 		{
 			std::string oldestZone = _zoneHistory.front();
 			_zoneHistory.pop_front();
