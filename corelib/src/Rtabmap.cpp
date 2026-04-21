@@ -2726,9 +2726,9 @@ bool Rtabmap::process(
 	bool missingZonePoseForClassification = false;
 
 	// ★ 현재 위치 기반 zone 업데이트
-	if(_memory->getLastWorkingSignature())
+	if(_memory->getLastWorkingSignature(true))
 	{
-		int lastSignatureId = _memory->getLastWorkingSignature()->id();
+		int lastSignatureId = _memory->getLastWorkingSignature(true)->id();
 		std::map<int, Transform>::const_iterator optimizedPoseIter = _optimizedPoses.find(lastSignatureId);
 		if(optimizedPoseIter != _optimizedPoses.end() && !optimizedPoseIter->second.isNull())
 		{
@@ -4694,6 +4694,7 @@ bool Rtabmap::process(
 	//============================================================
 	// TRANSFER — zone-aware post-retrieval memory cleanup
 	//============================================================
+	double totalTime = timerTotal.ticks();
 	ULOGGER_INFO("Total time processing = %fs...", totalTime);
 	if(!lastSignatureWasIntermediateNode && // skip memory management on intermediate nodes
 		_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed)
