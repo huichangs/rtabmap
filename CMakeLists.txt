@@ -1337,6 +1337,7 @@ install(
 
 ### Install package.xml for catkin
 install(FILES package.xml DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_PREFIX}" COMPONENT devel)
+install(FILES data/zone_signatures.json DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_PREFIX}/data" COMPONENT runtime)
 
 #######################
 # CPACK (Packaging)

@@ -48,6 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "rtabmap/core/RegistrationInfo.h"
 
 #include <rtabmap/utilite/ULogger.h>
+#include <rtabmap/utilite/UDirectory.h>
 #include <rtabmap/utilite/UFile.h>
 #include <rtabmap/utilite/UTimer.h>
 #include <rtabmap/utilite/UConversion.h>
@@ -70,7 +71,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/TextureMesh.h>
 
 #include <stdlib.h>
+#include <algorithm>
 #include <set>
+#include <sstream>
+#include <vector>
 
 #define LOG_F "LogF.txt"
 #define LOG_I "LogI.txt"
@@ -90,6 +94,207 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace rtabmap
 {
+
+namespace
+{
+
+typedef std::map<std::string, std::set<int> > ZoneSignaturesMap;
+
+struct ZoneSignaturesConfig
+{
+	ZoneSignaturesMap zoneSignatures;
+	std::string initialZone;
+};
+
+ZoneSignaturesConfig createDefaultZoneSignaturesConfig()
+{
+	ZoneSignaturesConfig config;
+	config.initialZone = "L1";
+
+	config.zoneSignatures["L1"] = std::set<int>{1, 7, 8, 9, 11, 12, 134, 136, 138, 140, 141, 143, 144, 155, 148, 149, 150, 153, 923};
+	config.zoneSignatures["H1"] = std::set<int>{13, 14, 15, 16, 17, 18, 19, 171, 172};
+	config.zoneSignatures["H2"] = std::set<int>{55, 56, 57, 58, 60, 61, 62, 107, 108, 113, 115, 117, 284, 285, 286, 287, 288, 290};
+	config.zoneSignatures["C2"] = std::set<int>{24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39, 40, 41, 43, 44, 45, 47, 48, 49, 50, 54};
+	config.zoneSignatures["C3"] = std::set<int>{266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286};
+	config.zoneSignatures["C4"] = std::set<int>{71, 72, 73, 74, 75, 76, 77, 78, 79, 82, 83, 84, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104};
+	config.zoneSignatures["R21"] = std::set<int>{891, 892, 893};
+	config.zoneSignatures["R13"] = std::set<int>{579, 581, 582};
+	config.zoneSignatures["R3"] = std::set<int>{671, 673, 674, 675, 676, 678};
+
+	return config;
+}
+
+void appendUniqueZoneSignaturesCandidate(std::vector<std::string> & candidates, const std::string & path)
+{
+	if(path.empty())
+	{
+		return;
+	}
+	if(std::find(candidates.begin(), candidates.end(), path) == candidates.end())
+	{
+		candidates.push_back(path);
+	}
+}
+
+void appendZoneSignaturesCandidate(std::vector<std::string> & candidates, const std::string & baseDir, const std::string & relativePath)
+{
+	if(baseDir.empty() || relativePath.empty())
+	{
+		return;
+	}
+	appendUniqueZoneSignaturesCandidate(candidates, baseDir + UDirectory::separator() + relativePath);
+}
+
+void appendInstalledZoneSignaturesCandidates(std::vector<std::string> & candidates, const char * envVarName, const std::string & relativePath)
+{
+	const char * envValue = getenv(envVarName);
+	if(!envValue || !envValue[0])
+	{
+		return;
+	}
+
+	std::stringstream stream(envValue);
+	std::string prefix;
+	while(std::getline(stream, prefix, ':'))
+	{
+		if(prefix.empty())
+		{
+			continue;
+		}
+		appendUniqueZoneSignaturesCandidate(
+			candidates,
+			prefix + UDirectory::separator() + "share" + UDirectory::separator() + "rtabmap" + UDirectory::separator() + relativePath);
+	}
+}
+
+std::string resolveZoneSignaturesPath(const std::string & configuredPath, const std::string & workingDir)
+{
+	std::vector<std::string> candidates;
+	std::string currentDir = UDirectory::currentDir(false);
+
+	if(!configuredPath.empty())
+	{
+		std::string expandedPath = uReplaceChar(configuredPath, '~', UDirectory::homeDir());
+		appendUniqueZoneSignaturesCandidate(candidates, expandedPath);
+		appendZoneSignaturesCandidate(candidates, workingDir, expandedPath);
+		if(currentDir != workingDir)
+		{
+			appendZoneSignaturesCandidate(candidates, currentDir, expandedPath);
+		}
+
+		for(std::vector<std::string>::const_iterator iter = candidates.begin(); iter != candidates.end(); ++iter)
+		{
+			if(UFile::exists(*iter))
+			{
+				return *iter;
+			}
+		}
+		return expandedPath;
+	}
+
+	const std::string defaultFile = "zone_signatures.json";
+	const std::string dataRelativeFile = std::string("data") + UDirectory::separator() + defaultFile;
+
+	appendZoneSignaturesCandidate(candidates, workingDir, defaultFile);
+	appendZoneSignaturesCandidate(candidates, workingDir, dataRelativeFile);
+	if(currentDir != workingDir)
+	{
+		appendZoneSignaturesCandidate(candidates, currentDir, defaultFile);
+		appendZoneSignaturesCandidate(candidates, currentDir, dataRelativeFile);
+	}
+	appendUniqueZoneSignaturesCandidate(candidates, defaultFile);
+	appendUniqueZoneSignaturesCandidate(candidates, dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "AMENT_PREFIX_PATH", dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "COLCON_PREFIX_PATH", dataRelativeFile);
+	appendInstalledZoneSignaturesCandidates(candidates, "CMAKE_PREFIX_PATH", dataRelativeFile);
+
+	for(std::vector<std::string>::const_iterator iter = candidates.begin(); iter != candidates.end(); ++iter)
+	{
+		if(UFile::exists(*iter))
+		{
+			return *iter;
+		}
+	}
+
+	return "";
+}
+
+bool loadZoneSignaturesNode(const cv::FileNode & zonesNode, ZoneSignaturesMap & zoneSignatures)
+{
+	if(zonesNode.empty() || zonesNode.type() != cv::FileNode::MAP)
+	{
+		return false;
+	}
+
+	for(cv::FileNodeIterator iter = zonesNode.begin(); iter != zonesNode.end(); ++iter)
+	{
+		if((*iter).type() != cv::FileNode::SEQ)
+		{
+			UWARN("Skipping zone \"%s\" because its JSON value is not an array.", (*iter).name().c_str());
+			continue;
+		}
+
+		std::set<int> ids;
+		for(cv::FileNodeIterator idIter = (*iter).begin(); idIter != (*iter).end(); ++idIter)
+		{
+			int id = 0;
+			(*idIter) >> id;
+			ids.insert(id);
+		}
+		zoneSignatures.insert(std::make_pair((*iter).name(), ids));
+	}
+
+	return !zoneSignatures.empty();
+}
+
+bool loadZoneSignaturesConfig(const std::string & filePath, ZoneSignaturesConfig & config)
+{
+	cv::FileStorage fs(filePath, cv::FileStorage::READ);
+	if(!fs.isOpened())
+	{
+		UERROR("Failed to open zone-signature JSON file \"%s\".", filePath.c_str());
+		return false;
+	}
+
+	ZoneSignaturesMap loadedZones;
+	cv::FileNode zonesNode = fs["zones"];
+	if(zonesNode.empty())
+	{
+		UERROR("Zone-signature JSON file \"%s\" must contain a top-level \"zones\" object.", filePath.c_str());
+		return false;
+	}
+
+	if(!loadZoneSignaturesNode(zonesNode, loadedZones))
+	{
+		UERROR("Failed to parse any zone definitions from \"%s\".", filePath.c_str());
+		return false;
+	}
+
+	std::string initialZone;
+	cv::FileNode initialZoneNode = fs["initial_zone"];
+	if(initialZoneNode.empty())
+	{
+		UERROR("Zone-signature JSON file \"%s\" must contain \"initial_zone\".", filePath.c_str());
+		return false;
+	}
+	initialZoneNode >> initialZone;
+	if(initialZone.empty())
+	{
+		UERROR("Zone-signature JSON file \"%s\" contains an empty \"initial_zone\".", filePath.c_str());
+		return false;
+	}
+	if(loadedZones.find(initialZone) == loadedZones.end())
+	{
+		UERROR("Configured initial zone \"%s\" is not defined in \"%s\".", initialZone.c_str(), filePath.c_str());
+		return false;
+	}
+
+	config.zoneSignatures = loadedZones;
+	config.initialZone = initialZone;
+	return true;
+}
+
+} // namespace
 
 Rtabmap::Rtabmap() :
 	_publishStats(Parameters::defaultRtabmapPublishStats()),
@@ -136,6 +341,7 @@ Rtabmap::Rtabmap() :
 	_proximityOdomGuess(Parameters::defaultRGBDProximityOdomGuess()),
 	_proximityMergedScanCovFactor(Parameters::defaultRGBDProximityMergedScanCovFactor()),
 	_databasePath(""),
+	_zoneSignaturesPath(Parameters::defaultRtabmapZoneSignaturesPath()),
 	_optimizeFromGraphEnd(Parameters::defaultRGBDOptimizeFromGraphEnd()),
 	_optimizationMaxError(Parameters::defaultRGBDOptimizeMaxError()),
 	_startNewMapOnLoopClosure(Parameters::defaultRtabmapStartNewMapOnLoopClosure()),
@@ -183,6 +389,7 @@ Rtabmap::Rtabmap() :
 	,_python(new PythonInterface())
 #endif
 {
+	resetSemanticZoneRuntimeState();
 }
 
 Rtabmap::~Rtabmap() {
@@ -318,9 +525,24 @@ void Rtabmap::flushStatisticLogs()
 	}
 }
 
+void Rtabmap::resetSemanticZoneRuntimeState()
+{
+	_zoneInitialized = false;
+	_zoneSignatures.clear();
+	_bootstrapZone.clear();
+	_loadedZoneSignaturesPath.clear();
+	_activeZones.clear();
+	_removedSize = 0;
+	_retrievedSize = 0;
+	_zoneHistory.clear();
+	_previousMatchedZones.clear();
+	_zoneUpdated = false;
+}
+
 void Rtabmap::init(const ParametersMap & parameters, const std::string & databasePath, bool loadDatabaseParameters)
 {
 	UDEBUG("path=%s", databasePath.c_str());
+	resetSemanticZoneRuntimeState();
 	_databasePath = databasePath;
 	if(!_databasePath.empty())
 	{
@@ -464,6 +686,7 @@ void Rtabmap::init(const std::string & configFile, const std::string & databaseP
 void Rtabmap::close(bool databaseSaved, const std::string & ouputDatabasePath)
 {
 	UINFO("databaseSaved=%d", databaseSaved?1:0);
+	resetSemanticZoneRuntimeState();
 	_highestHypothesis = std::make_pair(0,0.0f);
 	_loopClosureHypothesis = std::make_pair(0,0.0f);
 	_lastProcessTime = 0.0;
@@ -613,6 +836,15 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRGBDProximityOdomGuess(), _proximityOdomGuess);
 	Parameters::parse(parameters, Parameters::kRGBDProximityMergedScanCovFactor(), _proximityMergedScanCovFactor);
 	UASSERT(_proximityMergedScanCovFactor>0.0);
+
+	{
+		std::string previousPath = _zoneSignaturesPath;
+		Parameters::parse(parameters, Parameters::kRtabmapZoneSignaturesPath(), _zoneSignaturesPath);
+		if(_zoneSignaturesPath != previousPath)
+		{
+			_zoneInitialized = false;
+		}
+	}
 
 	bool optimizeFromGraphEndPrevious = _optimizeFromGraphEnd;
 	Parameters::parse(parameters, Parameters::kRGBDOptimizeFromGraphEnd(), _optimizeFromGraphEnd);
@@ -1089,6 +1321,7 @@ void Rtabmap::exportPoses(const std::string & path, bool optimized, bool global,
 void Rtabmap::resetMemory()
 {
 	UDEBUG("");
+	resetSemanticZoneRuntimeState();
 	_highestHypothesis = std::make_pair(0,0.0f);
 	_loopClosureHypothesis = std::make_pair(0,0.0f);
 	_lastProcessTime = 0.0;
@@ -1240,6 +1473,52 @@ bool Rtabmap::process(
 	double timeJoiningTrash = 0;
 	double timeStatsCreation = 0;
 
+	if(!_zoneInitialized)
+	{
+		std::string resolvedZoneSignaturesPath = resolveZoneSignaturesPath(_zoneSignaturesPath, _wDir);
+		resetSemanticZoneRuntimeState();
+
+		ZoneSignaturesConfig loadedConfig;
+		bool usingFallbackZoneConfig = false;
+		if(resolvedZoneSignaturesPath.empty())
+		{
+			UWARN("Zone signatures JSON was not found. Falling back to built-in zone definitions. Set %s or make zone_signatures.json available in the working directory, working-directory data folder, or installed share/rtabmap/data to override them.",
+				Parameters::kRtabmapZoneSignaturesPath().c_str());
+			loadedConfig = createDefaultZoneSignaturesConfig();
+			usingFallbackZoneConfig = true;
+		}
+		else if(!loadZoneSignaturesConfig(resolvedZoneSignaturesPath, loadedConfig))
+		{
+			UWARN("Zone initialization could not load \"%s\". Falling back to built-in zone definitions.", resolvedZoneSignaturesPath.c_str());
+			loadedConfig = createDefaultZoneSignaturesConfig();
+			resolvedZoneSignaturesPath.clear();
+			usingFallbackZoneConfig = true;
+		}
+
+		_loadedZoneSignaturesPath = resolvedZoneSignaturesPath;
+		_zoneSignatures = loadedConfig.zoneSignatures;
+		_bootstrapZone = loadedConfig.initialZone;
+		_previousMatchedZones.insert(_bootstrapZone);
+
+		_activeZones.insert(_bootstrapZone);
+		_zoneHistory.push_back(_bootstrapZone);
+
+		if(usingFallbackZoneConfig)
+		{
+			UINFO("Loaded built-in fallback zone definitions.");
+		}
+		else
+		{
+			UINFO("Loaded zone definitions from \"%s\".", resolvedZoneSignaturesPath.c_str());
+		}
+		UWARN("Zone definitions initialized:");
+		for(ZoneSignaturesMap::const_iterator iter = _zoneSignatures.begin(); iter != _zoneSignatures.end(); ++iter)
+		{
+			UINFO("  Zone %s: %d signatures", iter->first.c_str(), (int)iter->second.size());
+		}
+		UINFO("Bootstrap zone set to %s", _bootstrapZone.c_str());
+		_zoneInitialized = true;
+	}
 	float hypothesisRatio = 0.0f; // Only used for statistics
 	bool rejectedLoopClosure = false;
 
@@ -2240,138 +2519,138 @@ bool Rtabmap::process(
 	// Also skip memory mangement on intermediate nodes
 	if(!(_memory->allNodesInWM() && maxLocalLocationsImmunized == 0) && signature->getWeight()>=0)
 	{
-		if(retrievalId > 0)
-		{
-			//Load neighbors
-			ULOGGER_INFO("Retrieving locations... around id=%d", retrievalId);
-			int neighborhoodSize = (int)_bayesFilter->getPredictionLC().size()-1;
-			UASSERT(neighborhoodSize >= 0);
-			ULOGGER_DEBUG("margin=%d maxRetieved=%d", neighborhoodSize, _maxRetrieved);
+		// if(retrievalId > 0)
+		// {
+		// 	//Load neighbors
+		// 	ULOGGER_INFO("Retrieving locations... around id=%d", retrievalId);
+		// 	int neighborhoodSize = (int)_bayesFilter->getPredictionLC().size()-1;
+		// 	UASSERT(neighborhoodSize >= 0);
+		// 	ULOGGER_DEBUG("margin=%d maxRetieved=%d", neighborhoodSize, _maxRetrieved);
 
-			UTimer timeGetN;
-			unsigned int nbLoadedFromDb = 0;
-			std::set<int> reactivatedIdsSet;
-			std::map<int, int> neighbors;
-			int nbDirectNeighborsInDb = 0;
+		// 	UTimer timeGetN;
+		// 	unsigned int nbLoadedFromDb = 0;
+		// 	std::set<int> reactivatedIdsSet;
+		// 	std::map<int, int> neighbors;
+		// 	int nbDirectNeighborsInDb = 0;
 
-			// priority in time
-			// Direct neighbors TIME
-			ULOGGER_DEBUG("In TIME");
-			neighbors = _memory->getNeighborsId(retrievalId,
-					neighborhoodSize,
-					_maxRetrieved,
-					true,
-					true,
-					false,
-					true,
-					std::set<int>(),
-					&timeGetNeighborsTimeDb);
-			ULOGGER_DEBUG("neighbors of %d in time = %d", retrievalId, (int)neighbors.size());
-			//Priority to locations near in time (direct neighbor) then by space (loop closure)
-			bool firstPassDone = false; // just to avoid checking to STM after the first pass
-			int m = 0;
-			while(m < neighborhoodSize)
-			{
-				std::set<int> idsSorted;
-				for(std::map<int, int>::iterator iter=neighbors.begin(); iter!=neighbors.end();)
-				{
-					if(!firstPassDone && _memory->isInSTM(iter->first))
-					{
-						neighbors.erase(iter++);
-					}
-					else if(iter->second == m)
-					{
-						if(reactivatedIdsSet.find(iter->first) == reactivatedIdsSet.end())
-						{
-							idsSorted.insert(iter->first);
-							reactivatedIdsSet.insert(iter->first);
+		// 	// priority in time
+		// 	// Direct neighbors TIME
+		// 	ULOGGER_DEBUG("In TIME");
+		// 	neighbors = _memory->getNeighborsId(retrievalId,
+		// 			neighborhoodSize,
+		// 			_maxRetrieved,
+		// 			true,
+		// 			true,
+		// 			false,
+		// 			true,
+		// 			std::set<int>(),
+		// 			&timeGetNeighborsTimeDb);
+		// 	ULOGGER_DEBUG("neighbors of %d in time = %d", retrievalId, (int)neighbors.size());
+		// 	//Priority to locations near in time (direct neighbor) then by space (loop closure)
+		// 	bool firstPassDone = false; // just to avoid checking to STM after the first pass
+		// 	int m = 0;
+		// 	while(m < neighborhoodSize)
+		// 	{
+		// 		std::set<int> idsSorted;
+		// 		for(std::map<int, int>::iterator iter=neighbors.begin(); iter!=neighbors.end();)
+		// 		{
+		// 			if(!firstPassDone && _memory->isInSTM(iter->first))
+		// 			{
+		// 				neighbors.erase(iter++);
+		// 			}
+		// 			else if(iter->second == m)
+		// 			{
+		// 				if(reactivatedIdsSet.find(iter->first) == reactivatedIdsSet.end())
+		// 				{
+		// 					idsSorted.insert(iter->first);
+		// 					reactivatedIdsSet.insert(iter->first);
 
-							if(m == 1 && _memory->getSignature(iter->first) == 0)
-							{
-								++nbDirectNeighborsInDb;
-							}
+		// 					if(m == 1 && _memory->getSignature(iter->first) == 0)
+		// 					{
+		// 						++nbDirectNeighborsInDb;
+		// 					}
 
-							//immunized locations in the neighborhood from being transferred
-							if(immunizedLocations.insert(iter->first).second)
-							{
-								++immunizedGlobally;
-							}
+		// 					//immunized locations in the neighborhood from being transferred
+		// 					if(immunizedLocations.insert(iter->first).second)
+		// 					{
+		// 						++immunizedGlobally;
+		// 					}
 
-							//UDEBUG("nt=%d m=%d immunized=1", iter->first, iter->second);
-						}
-						neighbors.erase(iter++);
-					}
-					else
-					{
-						++iter;
-					}
-				}
-				firstPassDone = true;
-				reactivatedIds.insert(reactivatedIds.end(), idsSorted.rbegin(), idsSorted.rend());
-				++m;
-			}
+		// 					//UDEBUG("nt=%d m=%d immunized=1", iter->first, iter->second);
+		// 				}
+		// 				neighbors.erase(iter++);
+		// 			}
+		// 			else
+		// 			{
+		// 				++iter;
+		// 			}
+		// 		}
+		// 		firstPassDone = true;
+		// 		reactivatedIds.insert(reactivatedIds.end(), idsSorted.rbegin(), idsSorted.rend());
+		// 		++m;
+		// 	}
 
-			// neighbors SPACE, already added direct neighbors will be ignored
-			ULOGGER_DEBUG("In SPACE");
-			neighbors = _memory->getNeighborsId(retrievalId,
-					neighborhoodSize,
-					_maxRetrieved,
-					true,
-					false,
-					false,
-					false,
-					std::set<int>(),
-					&timeGetNeighborsSpaceDb);
-			ULOGGER_DEBUG("neighbors of %d in space = %d", retrievalId, (int)neighbors.size());
-			firstPassDone = false;
-			m = 0;
-			while(m < neighborhoodSize)
-			{
-				std::set<int> idsSorted;
-				for(std::map<int, int>::iterator iter=neighbors.begin(); iter!=neighbors.end();)
-				{
-					if(!firstPassDone && _memory->isInSTM(iter->first))
-					{
-						neighbors.erase(iter++);
-					}
-					else if(iter->second == m)
-					{
-						if(reactivatedIdsSet.find(iter->first) == reactivatedIdsSet.end())
-						{
-							idsSorted.insert(iter->first);
-							reactivatedIdsSet.insert(iter->first);
+		// 	// neighbors SPACE, already added direct neighbors will be ignored
+		// 	ULOGGER_DEBUG("In SPACE");
+		// 	neighbors = _memory->getNeighborsId(retrievalId,
+		// 			neighborhoodSize,
+		// 			_maxRetrieved,
+		// 			true,
+		// 			false,
+		// 			false,
+		// 			false,
+		// 			std::set<int>(),
+		// 			&timeGetNeighborsSpaceDb);
+		// 	ULOGGER_DEBUG("neighbors of %d in space = %d", retrievalId, (int)neighbors.size());
+		// 	firstPassDone = false;
+		// 	m = 0;
+		// 	while(m < neighborhoodSize)
+		// 	{
+		// 		std::set<int> idsSorted;
+		// 		for(std::map<int, int>::iterator iter=neighbors.begin(); iter!=neighbors.end();)
+		// 		{
+		// 			if(!firstPassDone && _memory->isInSTM(iter->first))
+		// 			{
+		// 				neighbors.erase(iter++);
+		// 			}
+		// 			else if(iter->second == m)
+		// 			{
+		// 				if(reactivatedIdsSet.find(iter->first) == reactivatedIdsSet.end())
+		// 				{
+		// 					idsSorted.insert(iter->first);
+		// 					reactivatedIdsSet.insert(iter->first);
 
-							if(m == 1 && _memory->getSignature(iter->first) == 0)
-							{
-								++nbDirectNeighborsInDb;
-							}
-							//UDEBUG("nt=%d m=%d", iter->first, iter->second);
-						}
-						neighbors.erase(iter++);
-					}
-					else
-					{
-						++iter;
-					}
-				}
-				firstPassDone = true;
-				reactivatedIds.insert(reactivatedIds.end(), idsSorted.rbegin(), idsSorted.rend());
-				++m;
-			}
-			ULOGGER_INFO("neighborhoodSize=%d, "
-					"reactivatedIds.size=%d, "
-					"nbLoadedFromDb=%d, "
-					"nbDirectNeighborsInDb=%d, "
-					"time=%fs (%fs %fs)",
-					neighborhoodSize,
-					reactivatedIds.size(),
-					(int)nbLoadedFromDb,
-					nbDirectNeighborsInDb,
-					timeGetN.ticks(),
-					timeGetNeighborsTimeDb,
-					timeGetNeighborsSpaceDb);
+		// 					if(m == 1 && _memory->getSignature(iter->first) == 0)
+		// 					{
+		// 						++nbDirectNeighborsInDb;
+		// 					}
+		// 					//UDEBUG("nt=%d m=%d", iter->first, iter->second);
+		// 				}
+		// 				neighbors.erase(iter++);
+		// 			}
+		// 			else
+		// 			{
+		// 				++iter;
+		// 			}
+		// 		}
+		// 		firstPassDone = true;
+		// 		reactivatedIds.insert(reactivatedIds.end(), idsSorted.rbegin(), idsSorted.rend());
+		// 		++m;
+		// 	}
+		// 	ULOGGER_INFO("neighborhoodSize=%d, "
+		// 			"reactivatedIds.size=%d, "
+		// 			"nbLoadedFromDb=%d, "
+		// 			"nbDirectNeighborsInDb=%d, "
+		// 			"time=%fs (%fs %fs)",
+		// 			neighborhoodSize,
+		// 			reactivatedIds.size(),
+		// 			(int)nbLoadedFromDb,
+		// 			nbDirectNeighborsInDb,
+		// 			timeGetN.ticks(),
+		// 			timeGetNeighborsTimeDb,
+		// 			timeGetNeighborsSpaceDb);
 
-		}
+		// }
 	}
 
 	//============================================================
@@ -2383,253 +2662,243 @@ bool Rtabmap::process(
 		// Priority on locations on the planned path
 		if(_path.size())
 		{
-			// Note: retrieval on path with intermediate nodes is not supported. Note that the planned path would 
+			// Note: retrieval on path with intermediate nodes is not supported. Note that the planned path would
 			//       eventually fail anyway because intermediate nodes are not in _optimizedPoses.
 			updateGoalIndex();
-
-			float distanceSoFar = 0.0f;
-			// immunize all nodes after current node and
-			// retrieve nodes after current node in the maximum radius from the current node
-			for(unsigned int i=_pathCurrentIndex; i<_path.size(); ++i)
-			{
-				if(_localRadius > 0.0f && i != _pathCurrentIndex)
-				{
-					distanceSoFar += _path[i-1].second.getDistance(_path[i].second);
-				}
-
-				if(_memory->getSignature(_path[i].first) != 0)
-				{
-					if(immunizedLocations.insert(_path[i].first).second)
-					{
-						++immunizedLocally;
-					}
-					UDEBUG("Path immunization: node %d (dist=%fm)", _path[i].first, distanceSoFar);
-				}
-				else if(retrievalLocalIds.size() < _maxLocalRetrieved)
-				{
-					UINFO("retrieval of node %d on path (dist=%fm)", _path[i].first, distanceSoFar);
-					retrievalLocalIds.push_back(_path[i].first);
-					// retrieved locations are automatically immunized
-				}
-				
-				if(distanceSoFar > _localRadius)
-				{
-					UDEBUG("Stop on node %d (dist=%fm > %fm)",
-							_path[i].first, distanceSoFar, _localRadius);
-					break;
-				}
-			}
-		}
-
-		if(!(_memory->allNodesInWM() && maxLocalLocationsImmunized == 0))
-		{
-			// immunize the path from the nearest local location to the current location
-			if(immunizedLocally < maxLocalLocationsImmunized &&
-				_memory->isIncremental()) // Can only work in mapping mode
-			{
-				std::map<int ,Transform> poses;
-				// remove poses from STM
-				for(std::map<int, Transform>::iterator iter=_optimizedPoses.begin(); iter!=_optimizedPoses.end(); ++iter)
-				{
-					if(iter->first > 0 && !_memory->isInSTM(iter->first))
-					{
-						poses.insert(*iter);
-					}
-				}
-				int nearestId = graph::findNearestNode(poses, _optimizedPoses.at(signature->id()));
-
-				if(nearestId > 0 &&
-					(_localRadius==0 ||
-					 _optimizedPoses.at(signature->id()).getDistance(_optimizedPoses.at(nearestId)) < _localRadius))
-				{
-					std::multimap<int, int> links;
-					for(std::multimap<int, Link>::iterator iter=_constraints.begin(); iter!=_constraints.end(); ++iter)
-					{
-						if(uContains(_optimizedPoses, iter->second.from()) && uContains(_optimizedPoses, iter->second.to()))
-						{
-							links.insert(std::make_pair(iter->second.from(), iter->second.to()));
-							links.insert(std::make_pair(iter->second.to(), iter->second.from())); // <->
-						}
-					}
-
-					std::list<std::pair<int, Transform> > path = graph::computePath(_optimizedPoses, links, nearestId, signature->id());
-					if(path.size() == 0)
-					{
-						UWARN("Could not compute a path between %d and %d", nearestId, signature->id());
-					}
-					else
-					{
-						for(std::list<std::pair<int, Transform> >::iterator iter=path.begin();
-							iter!=path.end();
-							++iter)
-						{
-							if(iter->first>0)
-							{
-								if(immunizedLocally >= maxLocalLocationsImmunized)
-								{
-									// set 20 to avoid this warning when starting mapping
-									if(maxLocalLocationsImmunized > 20 && _someNodesHaveBeenTransferred)
-									{
-										UWARN("Could not immunize the whole local path (%d) between "
-											  "%d and %d (max location immunized=%d). You may want "
-											  "to increase RGBD/LocalImmunizationRatio (current=%f (%d of WM=%d)) "
-											  "to be able to immunize longer paths.",
-												(int)path.size(),
-												nearestId,
-												signature->id(),
-												maxLocalLocationsImmunized,
-												_localImmunizationRatio,
-												maxLocalLocationsImmunized,
-												(int)_memory->getWorkingMem().size());
-									}
-									break;
-								}
-								else if(!_memory->isInSTM(iter->first))
-								{
-									if(immunizedLocations.insert(iter->first).second)
-									{
-										++immunizedLocally;
-									}
-									//UDEBUG("local node %d on path immunized=1", iter->first);
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// retrieval based on the nodes close the the nearest pose in WM
-			// immunize closest nodes
-			std::map<int, float> nearNodes = graph::findNearestNodes(signature->id(), _optimizedPoses, _localRadius);
-			// sort by distance
-			std::multimap<float, int> nearNodesByDist;
-			for(std::map<int, float>::iterator iter=nearNodes.lower_bound(1); iter!=nearNodes.end(); ++iter)
-			{
-				nearNodesByDist.insert(std::make_pair(iter->second, iter->first));
-			}
-			UINFO("near nodes=%d, max local immunized=%d (immunized by path so far=%d), ratio=%f WM=%d",
-					(int)nearNodesByDist.size(),
-					maxLocalLocationsImmunized,
-					immunizedLocally,
-					_localImmunizationRatio,
-					(int)_memory->getWorkingMem().size());
-			std::list<int> retrievalLocalIdsIntermediate;
-			for(std::multimap<float, int>::iterator iter=nearNodesByDist.begin();
-				iter!=nearNodesByDist.end() && (retrievalLocalIds.size() < _maxLocalRetrieved || immunizedLocally < maxLocalLocationsImmunized);
-				++iter)
-			{
-				const Signature * s = _memory->getSignature(iter->second);
-				if(s!=0)
-				{
-					if(s->getWeight() != -1 && retrievalLocalIds.size() < _maxLocalRetrieved)
-					{
-						// If there is a change of direction, better to be retrieving
-						// all nearest signatures than only newest neighbors.
-						// Use getNeighborsId instead of direct links to support intermediate nodes.
-						std::map<int, int> ids = _memory->getNeighborsId(s->id(), 2, _maxLocalRetrieved-retrievalLocalIds.size(), true, false, false);
-						for(std::map<int, int>::const_reverse_iterator jter=ids.rbegin();
-							jter!=ids.rend() && (retrievalLocalIds.size() < _maxLocalRetrieved || jter->second == 0);
-							++jter)
-						{
-							if(_memory->getSignature(jter->first) == 0)
-							{
-								if(jter->second == 0)
-								{
-									UINFO("retrieval of intermediate node %d (margin=%d) on local map (from=%d)", jter->first, jter->second, s->id());
-									retrievalLocalIdsIntermediate.push_back(jter->first);
-								}
-								else
-								{
-									UINFO("retrieval of node %d (margin=%d) on local map (from=%d)", jter->first, jter->second, s->id());
-									retrievalLocalIds.push_back(jter->first);
-								}
-							}
-						}
-					}
-					if(!_memory->isInSTM(s->id()) && immunizedLocally < maxLocalLocationsImmunized)
-					{
-						if(immunizedLocations.insert(s->id()).second)
-						{
-							++immunizedLocally;
-						}
-						//UDEBUG("local node %d (%f m) immunized=1", iter->second, iter->first);
-					}
-				}
-			}
-			// well, if the maximum retrieved is not reached, look for neighbors in database
-			if(retrievalLocalIds.size() < _maxLocalRetrieved)
-			{
-				std::set<int> retrievalLocalIdsSet(retrievalLocalIds.begin(), retrievalLocalIds.end());
-				retrievalLocalIdsSet.insert(retrievalLocalIdsIntermediate.begin(), retrievalLocalIdsIntermediate.end());
-				for(std::list<int>::iterator iter=retrievalLocalIds.begin();
-					iter!=retrievalLocalIds.end() && retrievalLocalIds.size() < _maxLocalRetrieved;
-					++iter)
-				{
-					std::map<int, int> ids = _memory->getNeighborsId(*iter, 2, _maxLocalRetrieved - (unsigned int)retrievalLocalIds.size() + 1, true, false, false);
-					for(std::map<int, int>::reverse_iterator jter=ids.rbegin();
-						jter!=ids.rend() && (retrievalLocalIds.size() < _maxLocalRetrieved || jter->second == 0);
-						++jter)
-					{
-						if(_memory->getSignature(jter->first) == 0 &&
-						   retrievalLocalIdsSet.find(jter->first) == retrievalLocalIdsSet.end())
-						{
-							if(jter->second == 0)
-							{
-								UINFO("retrieval of intermediate node %d (margin=%d) on local map (from=%d)", jter->first, jter->second, *iter);
-								retrievalLocalIdsIntermediate.push_back(jter->first);
-							}
-							else
-							{
-								UINFO("retrieval of node %d (margin=%d) on local map (from=%d)", jter->first, jter->second, *iter);
-								retrievalLocalIds.push_back(jter->first);
-							}
-							retrievalLocalIdsSet.insert(jter->first);
-						}
-					}
-				}
-			}
-
-			// update Age of the close signatures (oldest the farthest)
-			for(std::multimap<float, int>::reverse_iterator iter=nearNodesByDist.rbegin(); iter!=nearNodesByDist.rend(); ++iter)
-			{
-				_memory->updateAge(iter->second);
-			}
-
-			// insert them first to make sure they are loaded.
-			reactivatedIds.insert(reactivatedIds.begin(), retrievalLocalIdsIntermediate.begin(), retrievalLocalIdsIntermediate.end());
-			reactivatedIds.insert(reactivatedIds.begin(), retrievalLocalIds.begin(), retrievalLocalIds.end());
 		}
 	}
 
 	//============================================================
 	// RETRIEVAL 3/3 : Load signatures from the database
 	//============================================================
-	if(reactivatedIds.size())
+
+	timeReactivations = 0;
+    UTimer timerReactivations;
+
+	std::vector<std::string> matchedZones;
+	std::vector<std::string> retrievalZones;
+	std::set<int> retrievalZoneIds;
+	auto appendMatchedZone = [&matchedZones](const std::string & zoneName, bool condition)
 	{
-		// Not important if the loop closure hypothesis don't have all its neighbors loaded,
-		// only a loop closure link is added...
-		signaturesRetrieved = _memory->reactivateSignatures(
-				reactivatedIds,
-				_maxRetrieved+(unsigned int)retrievalLocalIds.size(), // add path retrieved
-				timeRetrievalDbAccess);
-
-		ULOGGER_INFO("retrieval of %d (db time = %fs)", (int)signaturesRetrieved.size(), timeRetrievalDbAccess);
-
-		timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
-		UINFO("total timeRetrievalDbAccess=%fs", timeRetrievalDbAccess);
-
-		// Immunize just retrieved signatures
-		immunizedLocations.insert(signaturesRetrieved.begin(), signaturesRetrieved.end());
-
-		if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
+		if(condition)
 		{
-			UWARN("Some signatures have been retrieved from memory management, clearing global scan map...");
-			_globalScanMap.clear();
-			_globalScanMapPoses.clear();
+			matchedZones.push_back(zoneName);
+		}
+	};
+	auto summarizeZoneList = [](const std::vector<std::string> & zones) -> std::string
+	{
+		if(zones.empty())
+		{
+			return std::string("(none)");
+		}
+
+		std::string summary;
+		for(size_t i = 0; i < zones.size(); ++i)
+		{
+			if(i > 0)
+			{
+				summary += ", ";
+			}
+			summary += zones[i];
+		}
+		return summary;
+	};
+	auto summarizeZoneSet = [](const std::set<std::string> & zones) -> std::string
+	{
+		if(zones.empty())
+		{
+			return std::string("(none)");
+		}
+
+		std::string summary;
+		for(std::set<std::string>::const_iterator iter = zones.begin(); iter != zones.end(); ++iter)
+		{
+			if(iter != zones.begin())
+			{
+				summary += ", ";
+			}
+			summary += *iter;
+		}
+		return summary;
+	};
+	Transform currentZonePose;
+	bool hasCurrentZonePose = false;
+	bool missingZonePoseForClassification = false;
+
+	// ★ 현재 위치 기반 zone 업데이트
+	if(_memory->getLastWorkingSignature())
+	{
+		int lastSignatureId = _memory->getLastWorkingSignature()->id();
+		std::map<int, Transform>::const_iterator optimizedPoseIter = _optimizedPoses.find(lastSignatureId);
+		if(optimizedPoseIter != _optimizedPoses.end() && !optimizedPoseIter->second.isNull())
+		{
+			currentZonePose = optimizedPoseIter->second;
+			hasCurrentZonePose = true;
+			float x = currentZonePose.x();
+			float y = currentZonePose.y();
+
+			// Overlapping regions intentionally activate every matching zone.
+			appendMatchedZone("L1", x >= -18.0f && x <= 10.0f && y <= 4.0f);
+			appendMatchedZone("H1", y >= 2.0f && x <= 12.0f && x >= 6.0f);
+			appendMatchedZone("H2", x <= -19.0f && x >= -35.0f && y >= 6.0f);
+			appendMatchedZone("C4", x <= -35.0f && x >= -41.0f);
+			appendMatchedZone("C3", x <= -16.0f && y <= 6.0f);
+			appendMatchedZone("C2", x <= 8.0f && x >= -25.0f && y >= 8.0f);
+			appendMatchedZone("R13", x <= -15.0f && x >= -25.0f && y >= 8.7f);
+			appendMatchedZone("R21", x >= 1.0f && x <=7.0f && y >= 8.0f);
+			appendMatchedZone("R3", x <= -41.0f);
+
+			std::set<std::string> matchedZoneSet(matchedZones.begin(), matchedZones.end());
+			if(!matchedZones.empty() && matchedZoneSet != _previousMatchedZones)
+			{
+				_zoneUpdated = true;
+				UWARN("Zone set changed: [%s] -> [%s] at (%.2f, %.2f)",
+					summarizeZoneSet(_previousMatchedZones).c_str(),
+					summarizeZoneList(matchedZones).c_str(),
+					x,
+					y);
+
+				_previousMatchedZones = matchedZoneSet;
+			}
+
+			// Keep every currently matched zone active, even if the overlap set itself
+			// didn't change and one of the zones was previously retired from _activeZones.
+			for(std::vector<std::string>::const_iterator iter = matchedZones.begin(); iter != matchedZones.end(); ++iter)
+			{
+				if(_activeZones.insert(*iter).second)
+				{
+					_zoneHistory.push_back(*iter);
+					_zoneUpdated = true;
+					UINFO("Added new zone to active: %s", iter->c_str());
+				}
+			}
+		}
+		else
+		{
+			missingZonePoseForClassification = true;
+			UWARN("Latest signature %d has no valid optimized pose for zone classification. Falling back to active zones if available.",
+				lastSignatureId);
 		}
 	}
-	timeReactivations = timer.ticks();
-	ULOGGER_INFO("timeReactivations=%fs", timeReactivations);
+	else
+	{
+		missingZonePoseForClassification = true;
+		UWARN("Last working signature is unavailable for zone classification. Falling back to active zones if available.");
+	}
+
+	if(!matchedZones.empty())
+	{
+		retrievalZones = matchedZones;
+	}
+	else if(!_activeZones.empty())
+	{
+		retrievalZones.assign(_activeZones.begin(), _activeZones.end());
+		if(hasCurrentZonePose)
+		{
+			UINFO("Pose (%.2f, %.2f) is outside all configured zone bounds. Falling back to active zones [%s].",
+				currentZonePose.x(),
+				currentZonePose.y(),
+				summarizeZoneList(retrievalZones).c_str());
+		}
+		else if(missingZonePoseForClassification)
+		{
+			UINFO("Using active-zone fallback [%s] because no valid optimized pose was available for zone classification.",
+				summarizeZoneList(retrievalZones).c_str());
+		}
+	}
+
+	for(std::vector<std::string>::const_iterator iter = retrievalZones.begin(); iter != retrievalZones.end(); ++iter)
+	{
+		ZoneSignaturesMap::const_iterator zoneIter = _zoneSignatures.find(*iter);
+		if(zoneIter != _zoneSignatures.end())
+		{
+			retrievalZoneIds.insert(zoneIter->second.begin(), zoneIter->second.end());
+		}
+		else
+		{
+			UWARN("Zone %s not found in zoneSignatures", iter->c_str());
+		}
+	}
+	auto collectMissingZoneIds = [this, &retrievalZoneIds]() -> std::list<int>
+	{
+		std::list<int> ids;
+		const std::map<int, double> & workingMem = _memory->getWorkingMem();
+		for(std::set<int>::const_iterator iter = retrievalZoneIds.begin(); iter != retrievalZoneIds.end(); ++iter)
+		{
+			if(workingMem.find(*iter) == workingMem.end())
+			{
+				ids.push_back(*iter);
+			}
+		}
+		return ids;
+	};
+	std::list<int> idsToRetrieve = collectMissingZoneIds();
+
+	// ============================================================
+	// Pre-retrieval info (memory cleanup deferred to TRANSFER)
+	// ============================================================
+	if(_maxMemoryAllowed != 0 && !retrievalZones.empty() && !idsToRetrieve.empty())
+	{
+		size_t currentWMSize = _memory->getWorkingMem().size();
+		size_t missingZoneLoadSize = idsToRetrieve.size();
+		ULOGGER_INFO("Pre-retrieval memory info: WM=%d, missing=%d, total=%d / max=%d",
+				(int)currentWMSize, (int)missingZoneLoadSize,
+				(int)(currentWMSize + missingZoneLoadSize), _maxMemoryAllowed);
+		if(currentWMSize + missingZoneLoadSize > (size_t)_maxMemoryAllowed)
+		{
+			ULOGGER_WARN("WM will temporarily exceed max after retrieval — cleanup deferred to TRANSFER");
+		}
+	}
+	_zoneUpdated = false;
+
+    
+    // ============================================================
+    // ★ RETRIEVE 수행
+    // ============================================================
+    
+    if(!retrievalZones.empty())
+    {
+        // Re-check working memory after any unloads so retrieval stays aligned with the current state.
+        idsToRetrieve = collectMissingZoneIds();
+
+        if(!idsToRetrieve.empty())
+        {
+            ULOGGER_WARN("=== Retrieving %d missing signature(s) for zones: [%s] (zone union size=%d) ===",
+                        (int)idsToRetrieve.size(),
+                        summarizeZoneList(retrievalZones).c_str(),
+                        (int)retrievalZoneIds.size());
+
+            signaturesRetrieved = _memory->reactivateSignatures(
+                idsToRetrieve,
+                _maxRetrieved + (unsigned int)idsToRetrieve.size(),
+                timeRetrievalDbAccess);
+
+            ULOGGER_WARN("Retrieved %d signatures", (int)signaturesRetrieved.size());
+
+            if(signaturesRetrieved.size() > 0) {
+                timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
+                UINFO("Total timeRetrievalDbAccess = %fs", timeRetrievalDbAccess);
+            }
+            
+            if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
+            {
+                UWARN("Signatures retrieved from memory management, clearing global scan map");
+                _globalScanMap.clear();
+                _globalScanMapPoses.clear();
+            }
+        }
+        else
+        {
+            ULOGGER_INFO("Zones [%s] already fully loaded in WM, skipping retrieval", summarizeZoneList(retrievalZones).c_str());
+        }
+    }
+    else
+    {
+        UWARN("No matched zone found and no active-zone fallback is available, skipping zone-based retrieval");
+    }
+
+	timeReactivations = timerReactivations.ticks(); 
+	ULOGGER_INFO("timeReactivations = %fs", timeReactivations);
 
 	//============================================================
 	// Proximity detections
@@ -4221,6 +4490,7 @@ bool Rtabmap::process(
 			UINFO("Set map correction = %s", _mapCorrection.prettyPrint().c_str());
 			statistics_.setLocalizationCovariance(_localizationCovariance);
 
+			_retrievedSize = _retrievedSize + (float)signaturesRetrieved.size();
 			// timings...
 			statistics_.addStatistic(Statistics::kTimingMemory_update(), timeMemoryUpdate*1000);
 			statistics_.addStatistic(Statistics::kTimingNeighbor_link_refining(), timeNeighborLinkRefining*1000);
@@ -4238,7 +4508,7 @@ bool Rtabmap::process(
 			statistics_.addStatistic(Statistics::kTimingCleaning_neighbors(), timeCleaningNeighbors*1000);
 
 			// retrieval
-			statistics_.addStatistic(Statistics::kMemorySignatures_retrieved(), (float)signaturesRetrieved.size());
+			statistics_.addStatistic(Statistics::kMemorySignatures_retrieved(), _retrievedSize);
 
 			// Feature specific parameters
 			statistics_.addStatistic(Statistics::kKeypointDictionary_size(), dictionarySize);
@@ -4422,38 +4692,88 @@ bool Rtabmap::process(
 
 
 	//============================================================
-	// TRANSFER
+	// TRANSFER — zone-aware post-retrieval memory cleanup
 	//============================================================
-	// If time allowed for the detection exceeds the limit of
-	// real-time, move the oldest signature with less frequency
-	// entry (from X oldest) from the short term memory to the
-	// long term memory.
-	//============================================================
-	double totalTime = timerTotal.ticks();
 	ULOGGER_INFO("Total time processing = %fs...", totalTime);
 	if(!lastSignatureWasIntermediateNode && // skip memory management on intermediate nodes
-		((_maxTimeAllowed != 0 && totalTime*1000>_maxTimeAllowed) ||
-		 (_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed)))
+		_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed)
 	{
-		if(_maxTimeAllowed!=0 && totalTime*1000>_maxTimeAllowed)
+		ULOGGER_INFO("Post-retrieval TRANSFER: WM %d exceeds max %d, cleaning up...",
+					(int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
+
+		// Build immunized set once from all active zones + retrieval target
+		std::set<int> immunizedLocationsSet;
+		for(std::set<std::string>::const_iterator zIt = _activeZones.begin(); zIt != _activeZones.end(); ++zIt)
 		{
-			ULOGGER_INFO("Removing old signatures because time limit is reached %f ms > %f ms...",
-				totalTime*1000, _maxTimeAllowed);
+			ZoneSignaturesMap::const_iterator zoneIter = _zoneSignatures.find(*zIt);
+			if(zoneIter != _zoneSignatures.end())
+			{
+				immunizedLocationsSet.insert(zoneIter->second.begin(), zoneIter->second.end());
+			}
 		}
-		if(_maxMemoryAllowed != 0 && _memory->getWorkingMem().size() > _maxMemoryAllowed)
+		immunizedLocationsSet.insert(retrievalZoneIds.begin(), retrievalZoneIds.end());
+		if(_lastLocalizationNodeId > 0)
 		{
-			ULOGGER_INFO("Removing old signatures because memory limit is reached %d > %d...",
-				_memory->getWorkingMem().size(), _maxMemoryAllowed);
+			immunizedLocationsSet.insert(_lastLocalizationNodeId);
 		}
-		immunizedLocations.insert(_lastLocalizationNodeId); // keep the latest localization in working memory
-		std::list<int> transferred = _memory->forget(immunizedLocations);
-		signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
-		if(!_someNodesHaveBeenTransferred && transferred.size())
+
+		// Retire oldest zones while WM exceeds limit
+		while(_memory->getWorkingMem().size() > _maxMemoryAllowed && _zoneHistory.size() > 1)
 		{
-			_someNodesHaveBeenTransferred = true; // only used to hide a warning on close nodes immunization
+			std::string oldestZone = _zoneHistory.front();
+			_zoneHistory.pop_front();
+			_activeZones.erase(oldestZone);
+
+			// Remove signatures unique to the retired zone from the immunized set
+			ZoneSignaturesMap::const_iterator retiredIter = _zoneSignatures.find(oldestZone);
+			if(retiredIter != _zoneSignatures.end())
+			{
+				for(std::set<int>::const_iterator idIt = retiredIter->second.begin(); idIt != retiredIter->second.end(); ++idIt)
+				{
+					// Only un-immunize if no other active zone protects this ID
+					bool protectedByOther = false;
+					for(std::set<std::string>::const_iterator azIt = _activeZones.begin(); azIt != _activeZones.end(); ++azIt)
+					{
+						ZoneSignaturesMap::const_iterator azIter = _zoneSignatures.find(*azIt);
+						if(azIter != _zoneSignatures.end() && azIter->second.count(*idIt))
+						{
+							protectedByOther = true;
+							break;
+						}
+					}
+					if(!protectedByOther && retrievalZoneIds.find(*idIt) == retrievalZoneIds.end())
+					{
+						immunizedLocationsSet.erase(*idIt);
+					}
+				}
+			}
+
+			ULOGGER_INFO("TRANSFER: retired zone %s, immunized=%d, WM=%d",
+						oldestZone.c_str(), (int)immunizedLocationsSet.size(),
+						(int)_memory->getWorkingMem().size());
+
+			std::list<int> transferred = _memory->forget(immunizedLocationsSet);
+			if(!transferred.empty())
+			{
+				_removedSize += transferred.size();
+				signaturesRemoved.insert(signaturesRemoved.end(), transferred.begin(), transferred.end());
+				if(!_someNodesHaveBeenTransferred)
+				{
+					_someNodesHaveBeenTransferred = true;
+				}
+			}
+			else
+			{
+				UWARN("TRANSFER: forget() returned empty after retiring zone %s", oldestZone.c_str());
+				break;
+			}
 		}
+
+		ULOGGER_INFO("TRANSFER complete: WM=%d / max=%d",
+					(int)_memory->getWorkingMem().size(), _maxMemoryAllowed);
 	}
 	_lastProcessTime = totalTime;
+
 
 	// cleanup cached gps values
 	for(std::list<int>::iterator iter=signaturesRemoved.begin(); iter!=signaturesRemoved.end() && _gpsGeocentricCache.size(); ++iter)
@@ -4596,7 +4916,7 @@ bool Rtabmap::process(
 		statistics_.addStatistic(Statistics::kTimingMemory_cleanup(), timeMemoryCleanup*1000);
 
 		// Transfer
-		statistics_.addStatistic(Statistics::kMemorySignatures_removed(), signaturesRemoved.size());
+		statistics_.addStatistic(Statistics::kMemorySignatures_removed(), _removedSize);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_globally(), immunizedGlobally);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_locally(), immunizedLocally);
 		statistics_.addStatistic(Statistics::kMemoryImmunized_locally_max(), maxLocalLocationsImmunized);
@@ -4810,7 +5130,7 @@ bool Rtabmap::process(
 		std::string logI = uFormat("%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
 									_loopClosureHypothesis.first,
 									_highestHypothesis.first,
-									(int)signaturesRemoved.size(),
+									_removedSize,
 									0,
 									refWordsCount,
 									dictionarySize,

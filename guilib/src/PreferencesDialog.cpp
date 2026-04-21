@@ -5099,7 +5099,14 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 	}
 	else
 	{
-		ULOGGER_WARN("Can't find the related QObject for parameter %s", key.c_str());
+		if(key.compare(Parameters::kRtabmapZoneSignaturesPath().c_str()) == 0)
+		{
+			uInsert(_parameters, ParametersPair(key, value));
+		}
+		else
+		{
+			ULOGGER_WARN("Can't find the related QObject for parameter %s", key.c_str());
+		}
 	}
 }
 

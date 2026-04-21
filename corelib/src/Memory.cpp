@@ -6965,10 +6965,14 @@ std::set<int> Memory::reactivateSignatures(const std::list<int> & ids, unsigned 
 		this->addSignatureToWmFromLTM(*i);
 	}
 	this->enableWordsRef(idsLoaded);
+	if(idsLoaded.size() != idsToLoad.size())
+	{
+		UWARN("Requested %d signature(s) from database, but only %d were reactivated.", (int)idsToLoad.size(), (int)idsLoaded.size());
+	}
 	UDEBUG("time = %fs", timer.ticks());
 
 	std::set<int> totalLoaded(idsToLoad.begin(), idsToLoad.end());
-	
+
 	// Ignore intermediate nodes in the total count of signatures loaded, keep loading next in queue
 	if(intermediateNodesLoaded > 0 && (int)idsInQueue.size() >= intermediateNodesLoaded)
 	{

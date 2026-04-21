@@ -1,3 +1,49 @@
+## Summary
+
+This repository is a derivative of RTAB-Map and changes signature load/unload behavior in `corelib/src/Rtabmap.cpp`.
+
+Instead of relying only on the default memory-management flow, it uses zone-to-signature mappings from `data/zone_signatures.json` to decide which signatures should be loaded or unloaded for the robot's current area.
+
+## What Is Different From Basic RTAB-Map
+
+In this repository, the load/unload algorithm in `corelib/src/Rtabmap.cpp` is changed so that:
+
+- signatures are grouped by zone
+- the current zone drives which signatures should loaded
+- signatures from older zones are unloaded when memory pressure grows
+- the zone-signature mapping comes from `data/zone_signatures.json`
+
+## How The Semantic Load/Unload Flow Works
+
+![overview](overview.png)
+
+We proposes a semantic zone-based map management approach to stabilize dense-map utilization under memory constraints. We associate keyframes with semantic indoor regions (e.g., rooms and corridors) and keyframe management at the semantic zone level prioritizes spatially relevant map content while respecting memory constraints. This reduces keyframe loading and unloading frequency and memory usage.
+
+
+
+*Why semantic zones? :*
+Semantic zones capture the functional structure of indoor spaces, enabling keyframe grouping that better reflects robot movement and revisitation behavior than purely geometric partitioning.
+
+## Core Components
+
+The main files for this repository-specific behavior are:
+
+- `corelib/src/Rtabmap.cpp`
+  - zone initialization
+  - zone transition handling
+  - oldest-zone unload policy
+- `corelib/include/rtabmap/core/Parameters.h`
+  - `Rtabmap/ZoneSignaturesPath` parameter definition
+- `data/zone_signatures.json`
+  - information for zone-signature mapping
+
+
+## Hospital Environment Used For Evaluation
+
+The repository includes a hospital environment asset used to evaluate the semantic zone policy.
+
+![Hospital environment](hospital_env.png)
+
 rtabmap
 =======
 
