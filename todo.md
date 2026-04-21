@@ -8,7 +8,8 @@
 
 ## Architecture Decisions
 - 2026-04-14: Semantic zone 기반 signature 관리 개념 자체는 유지 — TPS 저하는 구현 오류에 기인하며, 개념을 변경할 이유 없음
-- 2026-04-21: Upstream fork 유지 대신 upstream 0.23.5로 재이식 전략 채택 — upstream 최신 기능(loop closure 개선, intermediate nodes with MM, LIO-SAM 등) 활용 목적. 현재 브랜치 `segment-on-0.23.5`, merge 커밋 `4da0bbf5`에서 포팅 완료
+- 2026-04-21: Upstream fork 유지 대신 upstream 0.23.5로 재이식 전략 채택 — upstream 최신 기능(loop closure 개선, intermediate nodes with MM, LIO-SAM 등) 활용 목적. merge 커밋 `4da0bbf5`에서 포팅 완료
+- 2026-04-21: **메인 브랜치 승격** — `segment-on-0.23.5` → `segment`로 리네임하고, 기존 23.4 기반 `segment`는 `segment-0.23.4`로 보존(백업). 이후 개발/jetson 배포는 `segment`(0.23.5 기반)를 기준으로 한다. 원격 `origin/segment`는 여전히 23.4를 가리키므로 push 시 `origin/segment-0.23.4` 보존 후 `origin/segment` 갱신 필요(별도 사용자 확인).
 - 2026-04-21: **ROS2/Qt5 빌드는 anaconda env 오염된 쉘에서 수행하지 않는다** — 쉘 PATH에 `anaconda3/bin`이 들어있으면 CMake가 anaconda의 Qt5/libcurl/libtiff를 system보다 먼저 발견해서 moc silent fail 및 링커 심볼 미해결 유발. 빌드 전 `echo $PATH | grep anaconda`가 비어있어야 함. (`.bashrc`에서 `export PATH=~/anaconda3/bin:~/anaconda3/condabin:$PATH` 수동 라인 제거 + `conda config --set auto_activate_base false`로 해결됨)
 - 2026-04-21: **upstream 머지 후 첫 빌드 전 `git ls-files`와 upstream 간 파일 크기 대조로 소실 파일 전수 검사**를 권장 — `LoopClosureViewer.cpp`가 LF 정규화/머지 과정에서 0바이트로 소실된 사례. bash 스니펫은 Session 3 근인 주석 참고.
 
@@ -111,3 +112,14 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 - (c) Session 3 (LoopClosureViewer.cpp 복원) — 머지 중 소실 파일 복원
 
 초기 "0바이트 .o → 디스크 풀" 가설은 표면 현상이었고, (b)가 진짜 근인. 디스크 여유 확보는 부수 효과로 도움이 되었지만 결정 요인은 아님.
+
+---
+
+### Session 4 (trivial) — 2026-04-21 — 브랜치 리네임: 0.23.5를 segment로 승격, 23.4는 백업
+
+**Work Items**
+- [x] `segment` → `segment-0.23.4` (로컬 백업, 23.4 기반 원본 보존)
+- [x] `segment-on-0.23.5` → `segment` (0.23.5 포팅본을 메인으로 승격)
+
+**Outcome**
+로컬 리네임 완료. 현재 `HEAD = segment @ f161ff6c`(0.23.5 포팅 + 빌드 성공본). 기존 23.4 기반 브랜치는 `segment-0.23.4 @ dc4f37fc`로 보존. 원격 반영은 별도 push 필요 — `origin/segment-0.23.4` 먼저 push하여 백업 확보 후 `origin/segment` 갱신해야 함(아직 수행 안 함).
