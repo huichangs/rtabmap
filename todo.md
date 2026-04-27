@@ -147,11 +147,11 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 부팅 시 working memory가 직전 세션의 800개 signature를 모두 로드하여 메모리 한계(_maxMemoryAllowed)를 초과하는 문제를 근본 해결한다. 현재 `Mem/InitWMWithAllNodes=false` 설정에도 불구하고 `DBDriver::loadLastNodes()` 경로에서 800개 signature가 한 번에 로드되는 구조적 문제를 분석하여, lazy loading 메커니즘을 도입함으로써 부팅 시 bootstrap zone에 속한 signature만 우선 로드하고 나머지는 필요할 때 점진적으로 활성화하도록 개선한다. 이는 naive forget-all 방식(비용 과다)보다 효율적이다.
 
 **Work Items**
-- [ ] `Mem/DeferSignatureLoad` 파라미터 신설 (기본값 false, semantic zone fork에서만 true) — target: corelib/include/rtabmap/core/Parameters.h 또는 ParametersEntry 정의 위치 + corelib/src/Parameters.cpp (default 등록)
-- [ ] `Memory::loadDataFromDb()` 함수에서 bulk signature load 블록 조건부 가드 — target: corelib/src/Memory.cpp:233~319 (signature 로드 루프 스킵 가드, label/link/`_allNodesInWM` 검사는 유지)
-- [ ] `Rtabmap.cpp` zone init 직후(bootstrap zone 결정 후) bootstrap zone에 속한 signature ID만 수집하여 `_memory->reactivateSignatures(bootstrapZoneIds, _maxMemoryAllowed, t)` 호출 — target: corelib/src/Rtabmap.cpp:1476~1521 (zone init 블록 직후)
-- [ ] `DeferSignatureLoad=true`일 때 `loadAllNodesInWM` 경로도 함께 스킵하여 로드 일관성 유지 — target: corelib/src/Memory.cpp (loadDataFromDb 내 `_loadAllNodesInWM` 조건부 처리)
-- [ ] 필요 시 `Memory.h` 시그니처 변동 반영 (reactivateSignatures 존재 확인 또는 신규 정의) — target: corelib/include/rtabmap/core/Memory.h
+- [x] `Mem/DeferSignatureLoad` 파라미터 신설 (기본값 false, semantic zone fork에서만 true) — target: corelib/include/rtabmap/core/Parameters.h 또는 ParametersEntry 정의 위치 + corelib/src/Parameters.cpp (default 등록)
+- [x] `Memory::loadDataFromDb()` 함수에서 bulk signature load 블록 조건부 가드 — target: corelib/src/Memory.cpp:233~319 (signature 로드 루프 스킵 가드, label/link/`_allNodesInWM` 검사는 유지)
+- [x] `Rtabmap.cpp` zone init 직후(bootstrap zone 결정 후) bootstrap zone에 속한 signature ID만 수집하여 `_memory->reactivateSignatures(bootstrapZoneIds, _maxMemoryAllowed, t)` 호출 — target: corelib/src/Rtabmap.cpp:1476~1521 (zone init 블록 직후)
+- [x] `DeferSignatureLoad=true`일 때 `loadAllNodesInWM` 경로도 함께 스킵하여 로드 일관성 유지 — target: corelib/src/Memory.cpp (loadDataFromDb 내 `_loadAllNodesInWM` 조건부 처리)
+- [x] 필요 시 `Memory.h` 시그니처 변동 반영 (reactivateSignatures 존재 확인 또는 신규 정의) — target: corelib/include/rtabmap/core/Memory.h
 
 **Risk**
 - **직전 세션이 zone 분할되지 않은 상태로 끝난 경우:** 대부분의 signature에 zoneId가 미할당되어 있을 수 있으며, 이 경우 bootstrap zone load가 비어 있을 가능성 → fallback 정책 필요 (예: DeferSignatureLoad 활성화 시에도 최소 N개 최근 signature는 로드하도록 보장)
@@ -160,4 +160,16 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 - TRANSFER 섹션의 `_zoneHistory.size() > 1` 가드 이슈(별도 backlog 항목)는 이번 세션 범위 제외. 지연된 signature 로드 이후 TRANSFER 수행 시 zone 상태 불완전할 가능성 → 향후 검토 필요
 
 **Outcome**
-(작업 진행 중. 완료 시 기입.)
+5개 Work Item 모두 완료. 빌드는 orchestrator가 별도 수행 예정.
+
+변경 요약:
+- `Parameters.h`: `Mem/DeferSignatureLoad` (bool, default false) 신설. `InitWMWithAllNodes` 직후에 삽입.
+- `Memory.h`: `_deferSignatureLoad` (bool) private 멤버 추가.
+- `Memory.cpp`: 생성자에 `_deferSignatureLoad(Parameters::defaultMemDeferSignatureLoad())` 초기화 추가. `parseParameters()`에 `Parameters::parse(params, Parameters::kMemDeferSignatureLoad(), _deferSignatureLoad)` 추가. `loadDataFromDb()`의 bulk load 블록 전체(`loadAllNodesInWM` 분기 + signature 삽입 루프)를 `if(!_deferSignatureLoad)` 가드로 감쌈 — label/`_allNodesInWM`/odomMaxInf/dictionary 로딩은 그대로 유지.
+- `Rtabmap.cpp`: `_zoneInitialized = true;` 직후, `deferSignatureLoad` 파라미터를 `_parameters`에서 읽고, true일 때 `_bootstrapZone`에 해당하는 signature ID 집합을 `_zoneSignatures`에서 수집하여 `_memory->reactivateSignatures(bootstrapIds, _maxMemoryAllowed, tBootstrapDbAccess)` 호출. `_memory` null 체크 포함.
+
+결정 사항:
+- `Parameters.cpp`는 매크로 기반 자동 등록 구조이므로 별도 수정 불필요(Parameters.h의 RTABMAP_PARAM 매크로로 충분).
+- `_allNodesInWM` check loop는 deferred 시 `_signatures`가 비어있어 no-op이므로 별도 스킵 불필요.
+- `loadAllNodesInWM=false` 시 dictionary는 `_dbDriver->load(*_vwd, ...)` 경로로 정상 로드 — deferred 시에도 어휘는 유지됨.
+- bootstrap zone sig가 0개일 때 `reactivateSignatures(빈 list, ...)` 호출 — 문제없음(constraints 명시대로 단순 처리).
