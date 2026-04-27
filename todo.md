@@ -14,6 +14,8 @@
 - 2026-04-27: **분석 리포트 7.3(Forget 일괄 처리) 보류** — 7.3의 본래 동기는 "forget 루프가 retrieval 경로에 직렬 누적"이었으나, 이는 Session 1의 7.4(forget을 retrieval 이후로 이동)으로 해소됨. 현재 `Rtabmap.cpp:4722` 잔존 루프는 zone 단위로 forget()을 1회씩 호출(반복 횟수 = retire되는 zone 수, 통상 1~2)하므로 리포트가 지적한 "초과 signature 수만큼 반복"과 성격이 다름. `Memory::getRemovableSignatures` public화 비용 대비 이득 미미 → 백로그에서 제거.
 - 2026-04-27: **분석 리포트 7.5(Zone 전환 예측 pre-loading) 현 단계 미적용** — 사용자 판단으로 백로그에서 제거. 필요 시 향후 별도 세션으로 재도입.
 
+- 2026-04-27: **Review 이슈 4(commit 묶음) dismiss** — Session 6의 WI 1+5는 분리 시 컴파일 불가(파라미터 선언이 받는 멤버를 동반해야 함), WI 2+4는 동일 코드 변경(가드 한 개가 두 분기 모두 감쌈). CLAUDE.md "Each work item = one commit" 규칙은 묶음이 의미 분리 가능할 때 적용. 이번 묶음은 의미상 atomic이므로 위반 아님으로 결정.
+- 2026-04-27: **Review 이슈 3(_allNodesInWM stale) dismiss** — 유일 consumer Rtabmap.cpp:2539가 `(_allNodesInWM && maxLocalLocationsImmunized==0)`로 묶여 평가됨. semantic zone fork는 항상 _maxMemoryAllowed>0 → maxLocalLocationsImmunized>0 → stale 값과 무관하게 immunization 분기로 진입. 동작 영향 없으므로 fix 불필요.
 ---
 
 ## Session Log
@@ -182,3 +184,12 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 - `d5bf4719 feat(memory): skip bulk signature load when DeferSignatureLoad is set` (WI 2+4: Memory.cpp loadDataFromDb 가드)
 - `6f7301f1 feat(rtabmap): lazy-load bootstrap zone signatures after zone init` (WI 3: Rtabmap.cpp reactivateSignatures 호출)
 - `d8c6f4dd docs: update todo.md session 6 outcome`
+
+**Recovery / Review-driven amendments (2026-04-27)**
+Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처리한다. 이슈 3·4는 Architecture Decisions에 dismiss 사유 기록.
+- [ ] `loadOptimizedPoses()` WM-membership 검증을 `_deferSignatureLoad=true`일 때 우회 — target: corelib/src/Memory.cpp:2473~2502
+      Why: 이 검증의 본래 목적은 DB/WM 디렉토리 어긋남 sanity check. deferred 모드에서는 WM이 부분집합인 게 정상이라 항상 빈 map 리턴 유발 → optimized poses, constraints, _lastLocalizationPose, Bayes prior 모두 손실.
+- [ ] `_lastSignature==0` fresh-DB 분기를 `_deferSignatureLoad=false`일 때만 트리거 — target: corelib/src/Memory.cpp:581~589
+      Why: deferred 시 _stMem/_workingMem 비어 _lastSignature가 0으로 남음. 비빈 DB에도 addInfoAfterRun(0,0,0,0,0,...) 호출 → info_after_run 테이블에 가짜 fresh-start 레코드 삽입.
+- [ ] `Mem/DeferSignatureLoad` description에 WM 검증 우회 명시 — target: corelib/include/rtabmap/core/Parameters.h:227
+      Why: deferred 모드의 동작 변경(loadOptimizedPoses WM 검증 우회)을 사용자가 description으로 인지할 수 있도록.
