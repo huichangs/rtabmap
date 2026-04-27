@@ -199,3 +199,15 @@ Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처�
 - Memory.cpp `loadOptimizedPoses()`: WM-membership for-loop + 실패 시 return 블록을 `if(!_deferSignatureLoad){ ... }` 로 감쌈. deferred 모드에서는 DB poses를 그대로 반환.
 - Memory.cpp `loadDataFromDb()` 내 `_lastSignature==0` 분기 조건: `&& !_deferSignatureLoad` 추가. deferred 시 가짜 fresh-start 레코드 삽입 방지.
 - Parameters.h `Mem/DeferSignatureLoad` description: WM-membership 우회 + prior-session optimized poses 보존 동작 한 문장 추가.
+
+**Session Close (2026-04-27)**
+- Recovery 빌드: 사용자 수행, success (1min 52s).
+- Re-review: **PASS, issues: none.** Recovery 3 fix가 prior review의 confirmed 이슈 1·2·5를 정확히 해소. Default-off 경로 bit-for-bit 동일 검증.
+- Non-blocking suggestion 1건 (Memory.cpp:2477 `bool ok = true;` deferred 경로에서 dead) — reviewer가 "do not fix unless touching this code for another reason" 권고 → 미적용.
+- 세션 종료. 다음 단계는 실환경 검증 (rosbag2_hospital 재생, Mem/DeferSignatureLoad=true 환경에서 WM=bootstrap zone 크기 시작 + optimized poses 보존 확인).
+
+**Recovery Commits**
+- `6aef0b47 fix(memory): bypass loadOptimizedPoses WM check when DeferSignatureLoad=true`
+- `5d1b380e fix(memory): skip fresh-DB info_after_run path when DeferSignatureLoad=true`
+- `02925409 docs(memory): document loadOptimizedPoses bypass in DeferSignatureLoad description`
+- `184ca82e docs: record session 6 recovery amendments outcome`
