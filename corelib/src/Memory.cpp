@@ -94,6 +94,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_generateIds(Parameters::defaultMemGenerateIds()),
 	_badSignaturesIgnored(Parameters::defaultMemBadSignaturesIgnored()),
 	_mapLabelsAdded(Parameters::defaultMemMapLabelsAdded()),
+	_deferSignatureLoad(Parameters::defaultMemDeferSignatureLoad()),
 	_depthAsMask(Parameters::defaultMemDepthAsMask()),
 	_maskFloorThreshold(Parameters::defaultMemDepthMaskFloorThr()),
 	_stereoFromMotion(Parameters::defaultMemStereoFromMotion()),
@@ -722,6 +723,7 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemGenerateIds(), _generateIds);
 	Parameters::parse(params, Parameters::kMemBadSignaturesIgnored(), _badSignaturesIgnored);
 	Parameters::parse(params, Parameters::kMemMapLabelsAdded(), _mapLabelsAdded);
+	Parameters::parse(params, Parameters::kMemDeferSignatureLoad(), _deferSignatureLoad);
 	Parameters::parse(params, Parameters::kMemRehearsalSimilarity(), _similarityThreshold);
 	Parameters::parse(params, Parameters::kMemRecentWmRatio(), _recentWmRatio);
 	Parameters::parse(params, Parameters::kMemTransferSortingByWeightId(), _transferSortingByWeightId);

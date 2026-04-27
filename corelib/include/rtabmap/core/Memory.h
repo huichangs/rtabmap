@@ -321,6 +321,7 @@ private:
 	bool _generateIds;
 	bool _badSignaturesIgnored;
 	bool _mapLabelsAdded;
+	bool _deferSignatureLoad;
 	bool _depthAsMask;
 	float _maskFloorThreshold;
 	bool _stereoFromMotion;

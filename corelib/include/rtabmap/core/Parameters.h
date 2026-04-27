@@ -224,6 +224,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Mem, GenerateIds,                 bool, true,     "True=Generate location IDs, False=use input image IDs.");
     RTABMAP_PARAM(Mem, BadSignaturesIgnored,        bool, false,    "Bad signatures are ignored.");
     RTABMAP_PARAM(Mem, InitWMWithAllNodes,          bool, false,    "Initialize the Working Memory with all nodes in Long-Term Memory. When false, it is initialized with nodes of the previous session.");
+    RTABMAP_PARAM(Mem, DeferSignatureLoad,          bool, false,    "Defer bulk signature loading at startup (skip loadLastNodes/loadAllNodes in loadDataFromDb). When true, only bootstrap zone signatures are loaded via reactivateSignatures after zone init. Intended for semantic zone fork; has no effect if zone signatures are not configured.");
     RTABMAP_PARAM(Mem, DepthAsMask,                 bool, true,     "Use depth image as mask when extracting features for vocabulary.");
     RTABMAP_PARAM(Mem, DepthMaskFloorThr,           float, 0.0,     uFormat("Filter floor from depth mask below specified threshold (m) before extracting features. 0 means disabled, negative means remove all objects above the floor threshold instead. Ignored if %s is false.", kMemDepthAsMask().c_str()));
     RTABMAP_PARAM(Mem, StereoFromMotion,            bool, false,    uFormat("Triangulate features without depth using stereo from motion (odometry). It would be ignored if %s is true and the feature detector used supports masking.", kMemDepthAsMask().c_str()));
