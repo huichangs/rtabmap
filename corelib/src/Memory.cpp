@@ -239,84 +239,94 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 		Parameters::parse(parameters_, Parameters::kMemInitWMWithAllNodes(), loadAllNodesInWM);
 
 		// Load the last working memory...
-		std::list<Signature*> dbSignatures;
+		// When _deferSignatureLoad is true the bulk load is skipped; bootstrap zone
+		// signatures are loaded later via reactivateSignatures() in Rtabmap::process().
+		if(!_deferSignatureLoad)
+		{
+			std::list<Signature*> dbSignatures;
 
-		if(loadAllNodesInWM)
-		{
-			UDEBUG("Loading all nodes to WM...");
-			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading all nodes to WM...")));
-			std::set<int> ids;
-			_dbDriver->getAllNodeIds(ids, true);
-			_dbDriver->loadSignatures(std::list<int>(ids.begin(), ids.end()), dbSignatures, 0, !_loadVisualLocalFeaturesOnInit);
-		}
-		else
-		{
-			UDEBUG("Loading last nodes to WM...");
-			// load previous session working memory
-			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading last nodes to WM...")));
-			_dbDriver->loadLastNodes(dbSignatures, !_loadVisualLocalFeaturesOnInit);
-		}
-		for(std::list<Signature*>::reverse_iterator iter=dbSignatures.rbegin(); iter!=dbSignatures.rend(); ++iter)
-		{
-			// ignore bad signatures
-			if(!((*iter)->isBadSignature() && _badSignaturesIgnored))
+			if(loadAllNodesInWM)
 			{
-				// insert all in WM
-				// Note: it doesn't make sense to keep last STM images
-				//       of the last session in the new STM because they can be
-				//       only linked with the ones of the current session by
-				//       global loop closures.
-				_signatures.insert(std::pair<int, Signature *>((*iter)->id(), *iter));
-				_workingMem.insert(std::make_pair((*iter)->id(), UTimer::now()));
-				if(!(*iter)->getGroundTruthPose().isNull()) {
-					_groundTruths.insert(std::make_pair((*iter)->id(), (*iter)->getGroundTruthPose()));
-				}
-
-				if(!(*iter)->getLandmarks().empty())
-				{
-					// Update landmark indexes
-					for(std::map<int, Link>::const_iterator jter = (*iter)->getLandmarks().begin(); jter!=(*iter)->getLandmarks().end(); ++jter)
-					{
-						int landmarkId = jter->first;
-						UASSERT(landmarkId < 0);
-                        
-                        cv::Mat landmarkSize = jter->second.uncompressUserDataConst();
-                        if(!landmarkSize.empty() && landmarkSize.type() == CV_32FC1 && landmarkSize.total()==1)
-                        {
-                            std::pair<std::map<int, float>::iterator, bool> inserted=_landmarksSize.insert(std::make_pair(-landmarkId, landmarkSize.at<float>(0,0)));
-                            if(!inserted.second)
-                            {
-                                if(inserted.first->second != landmarkSize.at<float>(0,0))
-                                {
-                                    UWARN("Trying to update landmark size buffer for landmark %d with size=%f but "
-                                          "it has already a different size set. Keeping old size (%f).",
-                                          -landmarkId, inserted.first->second, landmarkSize.at<float>(0,0));
-                                }
-                            }
-							else
-							{
-								UDEBUG("Caching landmark size %f for %d", landmarkSize.at<float>(0,0), -landmarkId);
-							}
-                        }
-
-                        std::map<int, std::set<int> >::iterator nter = _landmarksIndex.find(landmarkId);
-						if(nter!=_landmarksIndex.end())
-						{
-							nter->second.insert((*iter)->id());
-						}
-						else
-						{
-							std::set<int> tmp;
-							tmp.insert((*iter)->id());
-							_landmarksIndex.insert(std::make_pair(landmarkId, tmp));
-						}
-					}
-				}
+				UDEBUG("Loading all nodes to WM...");
+				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading all nodes to WM...")));
+				std::set<int> ids;
+				_dbDriver->getAllNodeIds(ids, true);
+				_dbDriver->loadSignatures(std::list<int>(ids.begin(), ids.end()), dbSignatures, 0, !_loadVisualLocalFeaturesOnInit);
 			}
 			else
 			{
-				delete *iter;
+				UDEBUG("Loading last nodes to WM...");
+				// load previous session working memory
+				if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Loading last nodes to WM...")));
+				_dbDriver->loadLastNodes(dbSignatures, !_loadVisualLocalFeaturesOnInit);
 			}
+			for(std::list<Signature*>::reverse_iterator iter=dbSignatures.rbegin(); iter!=dbSignatures.rend(); ++iter)
+			{
+				// ignore bad signatures
+				if(!((*iter)->isBadSignature() && _badSignaturesIgnored))
+				{
+					// insert all in WM
+					// Note: it doesn't make sense to keep last STM images
+					//       of the last session in the new STM because they can be
+					//       only linked with the ones of the current session by
+					//       global loop closures.
+					_signatures.insert(std::pair<int, Signature *>((*iter)->id(), *iter));
+					_workingMem.insert(std::make_pair((*iter)->id(), UTimer::now()));
+					if(!(*iter)->getGroundTruthPose().isNull()) {
+						_groundTruths.insert(std::make_pair((*iter)->id(), (*iter)->getGroundTruthPose()));
+					}
+
+					if(!(*iter)->getLandmarks().empty())
+					{
+						// Update landmark indexes
+						for(std::map<int, Link>::const_iterator jter = (*iter)->getLandmarks().begin(); jter!=(*iter)->getLandmarks().end(); ++jter)
+						{
+							int landmarkId = jter->first;
+							UASSERT(landmarkId < 0);
+
+	                        cv::Mat landmarkSize = jter->second.uncompressUserDataConst();
+	                        if(!landmarkSize.empty() && landmarkSize.type() == CV_32FC1 && landmarkSize.total()==1)
+	                        {
+	                            std::pair<std::map<int, float>::iterator, bool> inserted=_landmarksSize.insert(std::make_pair(-landmarkId, landmarkSize.at<float>(0,0)));
+	                            if(!inserted.second)
+	                            {
+	                                if(inserted.first->second != landmarkSize.at<float>(0,0))
+	                                {
+	                                    UWARN("Trying to update landmark size buffer for landmark %d with size=%f but "
+	                                          "it has already a different size set. Keeping old size (%f).",
+	                                          -landmarkId, inserted.first->second, landmarkSize.at<float>(0,0));
+	                                }
+	                            }
+								else
+								{
+									UDEBUG("Caching landmark size %f for %d", landmarkSize.at<float>(0,0), -landmarkId);
+								}
+	                        }
+
+	                        std::map<int, std::set<int> >::iterator nter = _landmarksIndex.find(landmarkId);
+							if(nter!=_landmarksIndex.end())
+							{
+								nter->second.insert((*iter)->id());
+							}
+							else
+							{
+								std::set<int> tmp;
+								tmp.insert((*iter)->id());
+								_landmarksIndex.insert(std::make_pair(landmarkId, tmp));
+							}
+						}
+					}
+				}
+				else
+				{
+					delete *iter;
+				}
+			}
+		}
+		else
+		{
+			UINFO("Mem/DeferSignatureLoad=true: skipping bulk signature load. Bootstrap zone signatures will be loaded via reactivateSignatures() after zone init.");
+			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Mem/DeferSignatureLoad enabled: skipping bulk load, lazy zone loading active.")));
 		}
 
 		// Get labels
