@@ -1518,6 +1518,25 @@ bool Rtabmap::process(
 		}
 		UINFO("Bootstrap zone set to %s", _bootstrapZone.c_str());
 		_zoneInitialized = true;
+
+		// Lazy zone-aware load: if Mem/DeferSignatureLoad=true, load only bootstrap
+		// zone signatures now instead of the full previous-session WM.
+		bool deferSignatureLoad = Parameters::defaultMemDeferSignatureLoad();
+		Parameters::parse(_parameters, Parameters::kMemDeferSignatureLoad(), deferSignatureLoad);
+		if(deferSignatureLoad && _memory)
+		{
+			std::list<int> bootstrapIds;
+			std::map<std::string, std::set<int> >::const_iterator bootstrapIter = _zoneSignatures.find(_bootstrapZone);
+			if(bootstrapIter != _zoneSignatures.end())
+			{
+				bootstrapIds.assign(bootstrapIter->second.begin(), bootstrapIter->second.end());
+			}
+			UINFO("Mem/DeferSignatureLoad: loading %d bootstrap zone signatures for zone \"%s\".",
+				  (int)bootstrapIds.size(), _bootstrapZone.c_str());
+			double tBootstrapDbAccess = 0.0;
+			_memory->reactivateSignatures(bootstrapIds, _maxMemoryAllowed, tBootstrapDbAccess);
+			UINFO("Mem/DeferSignatureLoad: bootstrap zone load complete (%.3fs db access).", tBootstrapDbAccess);
+		}
 	}
 	float hypothesisRatio = 0.0f; // Only used for statistics
 	bool rejectedLoopClosure = false;
