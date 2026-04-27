@@ -3,7 +3,30 @@
 ## Backlog
 - [x] Upstream 0.23.5 포팅 빌드/동작 검증 — 2026-04-21 빌드 성공 + 실행 확인 완료 (Session 2/3 경유)
 - [x] Immunized set 1회 구축 + 차감 방식 (분석 리포트 7.2) — Session 1에서 TRANSFER 재설계 시 함께 적용됨 (Rtabmap.cpp:4706-4749). Session 5 정리
-- [ ] TRANSFER `_zoneHistory.size() > 1` 가드 재검토 — single-zone 상태에서도 WM threshold 초과 시 cleanup 허용 여부 — target: corelib/src/Rtabmap.cpp:4722 부근
+- [x] **Lazy zone-aware signature load (Session 6)** — 2026-04-27 빌드/실환경 검증 완료. `Mem/DeferSignatureLoad=true`에서 부팅 직후 WM=19(bootstrap zone L1) 시작 + 직전 세션 graph 상태(local map=768, last localization id=923) 보존 확인.
+
+### 다음 세션 우선순위 (2026-04-28~)
+- [ ] **[High] A/B 정량 비교** — `Mem/DeferSignatureLoad` true/false 두 번 돌려 부팅 직후 WM 크기 / 첫 프레임 RTAB-Map ms / forget 워닝 빈도 / RAM RSS 측정. Notion "Lazy Zone-Aware Signature Load — Session 6" 페이지의 "기대 효과" 표를 실제 수치로 채움.
+  - command:
+    ```
+    # false 비교군
+    ros2 launch rtabmap_launch rtabmap.launch.py ... rtabmap_args:="... --Mem/DeferSignatureLoad false ..." 2>&1 | tee ~/segment_ws/data/rtabmap_baseline_$(date +%Y%m%d_%H%M%S).log
+    # true 실험군
+    ros2 launch rtabmap_launch rtabmap.launch.py ... rtabmap_args:="... --Mem/DeferSignatureLoad true ..." 2>&1 | tee ~/segment_ws/data/rtabmap_defer_$(date +%Y%m%d_%H%M%S).log
+    ```
+  - 각 로그 파일을 가져오면 측정/시각화는 orchestrator가 처리.
+- [ ] **[High] 원격 push (사용자 확인 필수, 자동 수행 금지)** — Session 4 AD에 따라 백업 → main 갱신 순.
+  ```
+  git push origin segment-0.23.4   # 23.4 백업 먼저
+  git push origin segment          # 0.23.5 + Session 6 본 갱신
+  ```
+- [ ] **[Medium] rtabmap_viz GUI에 `Mem/DeferSignatureLoad` widget 추가** — Session 6 실행 로그 워닝: `[rtabmap_viz-3] PreferencesDialog.cpp:1996 Can't find the related QWidget for parameter Mem/DeferSignatureLoad`. CLI는 정상, UI 토글만 미지원.
+  - target: `guilib/src/ui/preferencesDialog.ui` (체크박스) + `guilib/src/PreferencesDialog.cpp` (binding)
+  - reference: 기존 `Mem/InitWMWithAllNodes` 위젯 자리 인접에 동일 패턴으로 추가 가능.
+- [ ] **[Low/Future] `getPaths() path.size()=0` graceful handling** — Session 6 실행 로그에 `nearestId=258 ids=0, aborting...` 다회 발생. nearestId가 active zone 밖일 때 path planning이 침묵 실패. localization은 영향 없음.
+  - target: `corelib/src/Rtabmap.cpp:5586`
+- [ ] **[Cosmetic, opportunistic]** `corelib/src/Memory.cpp:2477` `bool ok = true;` deferred 경로에서 dead 변수. re-review 권고: "do not fix unless touching this code for another reason". 인근 작업 시 함께 정리.
+- [ ] **[Low] TRANSFER `_zoneHistory.size() > 1` 가드 재검토** — single-zone 상태에서도 WM threshold 초과 시 cleanup 허용 여부 — target: `corelib/src/Rtabmap.cpp:4722` 부근.
 
 ## Architecture Decisions
 - 2026-04-14: Semantic zone 기반 signature 관리 개념 자체는 유지 — TPS 저하는 구현 오류에 기인하며, 개념을 변경할 이유 없음
@@ -211,3 +234,19 @@ Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처�
 - `5d1b380e fix(memory): skip fresh-DB info_after_run path when DeferSignatureLoad=true`
 - `02925409 docs(memory): document loadOptimizedPoses bypass in DeferSignatureLoad description`
 - `184ca82e docs: record session 6 recovery amendments outcome`
+
+**Real-environment Verification (2026-04-27 21:48)**
+사용자 직접 수행. `rosbag2_hospital` 재생 + localization 모드(`Mem/IncrementalMemory=false`) + `Mem/DeferSignatureLoad=true` + `Rtabmap/MemoryThr=100` 조합. DB: `~/Documents/RTAB-Map/rtabmap.db` (1109 MB, version 0.23.1).
+
+핵심 검증 결과:
+- WM=19로 정상 시작 (`(local map=768, WM=19)`) — bootstrap zone L1 (19개 signature)만 로드됨. **이전 동작 대비 RAM 대폭 감소.**
+- `Update map correction based on last localization saved in database! correction = ... nearest id = 923 of last pose = ...` 출력 — Fix 1 동작 확인. 직전 세션의 localization pose가 보존되어 부팅 직후 정확한 위치에서 시작.
+- `local map=768` — `_optimizedPoses`가 768개 그대로 보존. WM 크기와 graph 캐시 크기가 분리되어 의도대로 동작.
+- 정상 프레임 RTAB-Map 시간 130~190ms (TimeThr=300ms 한계 내). forget 폭주 없음.
+- 첫 프레임 632ms는 init overhead로 일회성, 정상.
+
+비핵심 워닝 (이번 작업 무관 / 비차단):
+- `_vwd->getUnusedWordsSize()...size=310902` — dictionary 미사용 단어, 별개 이슈.
+- `getPaths() path.size()=0!? nearestId=258 ids=0, aborting...` — path planning이 active zone 외부 nearestId에서 침묵 실패. localization 자체는 정상. → 백로그 항목으로 추가됨.
+- `[rtabmap_viz-3] Can't find the related QWidget for parameter Mem/DeferSignatureLoad` — UI에 widget 미정의. CLI는 정상. → 백로그 항목으로 추가됨.
+- `Rejecting localization (928 <-> 923) ... error ratio 3.025984` — outlier rejection (`RGBD/OptimizeMaxError=3.0`). 정상 graph optimizer 동작.
