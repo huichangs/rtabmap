@@ -2476,25 +2476,28 @@ std::map<int, Transform> Memory::loadOptimizedPoses(Transform * lastlocalization
 	{
 		bool ok = true;
 		std::map<int, Transform> poses = _dbDriver->loadOptimizedPoses(lastlocalizationPose);
-		// Make sure optimized poses match the working directory! Otherwise return nothing.
-		for(std::map<int, Transform>::iterator iter=poses.lower_bound(1); iter!=poses.end() && ok; ++iter)
+		if(!_deferSignatureLoad)
 		{
-			if(_workingMem.find(iter->first)==_workingMem.end())
+			// Make sure optimized poses match the working directory! Otherwise return nothing.
+			for(std::map<int, Transform>::iterator iter=poses.lower_bound(1); iter!=poses.end() && ok; ++iter)
 			{
-				UWARN("Node %d not found in working memory", iter->first);
-				ok = false;
+				if(_workingMem.find(iter->first)==_workingMem.end())
+				{
+					UWARN("Node %d not found in working memory", iter->first);
+					ok = false;
+				}
 			}
-		}
-		if(!ok)
-		{
-			UWARN("Optimized poses (%d) and working memory "
-				  "size (%d) don't match. Returning empty optimized "
-				  "poses to force re-update. If you want to use the "
-				  "saved optimized poses, set %s to true",
-				  (int)poses.size(),
-				  (int)_workingMem.size()-1, // less virtual place
-				  Parameters::kMemInitWMWithAllNodes().c_str());
-			return std::map<int, Transform>();
+			if(!ok)
+			{
+				UWARN("Optimized poses (%d) and working memory "
+					  "size (%d) don't match. Returning empty optimized "
+					  "poses to force re-update. If you want to use the "
+					  "saved optimized poses, set %s to true",
+					  (int)poses.size(),
+					  (int)_workingMem.size()-1, // less virtual place
+					  Parameters::kMemInitWMWithAllNodes().c_str());
+				return std::map<int, Transform>();
+			}
 		}
 		return poses;
 
