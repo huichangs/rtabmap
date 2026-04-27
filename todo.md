@@ -173,3 +173,12 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 - `_allNodesInWM` check loop는 deferred 시 `_signatures`가 비어있어 no-op이므로 별도 스킵 불필요.
 - `loadAllNodesInWM=false` 시 dictionary는 `_dbDriver->load(*_vwd, ...)` 경로로 정상 로드 — deferred 시에도 어휘는 유지됨.
 - bootstrap zone sig가 0개일 때 `reactivateSignatures(빈 list, ...)` 호출 — 문제없음(constraints 명시대로 단순 처리).
+
+**Build (2026-04-27)**
+사용자 직접 수행, `colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release ... --packages-select rtabmap` → **success (1min 55s)**.
+
+**Commits**
+- `ae491401 feat(memory): add Mem/DeferSignatureLoad parameter` (WI 1+5: Parameters.h, Memory.h, Memory.cpp constructor + parseParameters)
+- `d5bf4719 feat(memory): skip bulk signature load when DeferSignatureLoad is set` (WI 2+4: Memory.cpp loadDataFromDb 가드)
+- `6f7301f1 feat(rtabmap): lazy-load bootstrap zone signatures after zone init` (WI 3: Rtabmap.cpp reactivateSignatures 호출)
+- `d8c6f4dd docs: update todo.md session 6 outcome`
