@@ -187,9 +187,15 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 
 **Recovery / Review-driven amendments (2026-04-27)**
 Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처리한다. 이슈 3·4는 Architecture Decisions에 dismiss 사유 기록.
-- [ ] `loadOptimizedPoses()` WM-membership 검증을 `_deferSignatureLoad=true`일 때 우회 — target: corelib/src/Memory.cpp:2473~2502
+- [x] `loadOptimizedPoses()` WM-membership 검증을 `_deferSignatureLoad=true`일 때 우회 — target: corelib/src/Memory.cpp:2473~2502
       Why: 이 검증의 본래 목적은 DB/WM 디렉토리 어긋남 sanity check. deferred 모드에서는 WM이 부분집합인 게 정상이라 항상 빈 map 리턴 유발 → optimized poses, constraints, _lastLocalizationPose, Bayes prior 모두 손실.
-- [ ] `_lastSignature==0` fresh-DB 분기를 `_deferSignatureLoad=false`일 때만 트리거 — target: corelib/src/Memory.cpp:581~589
+- [x] `_lastSignature==0` fresh-DB 분기를 `_deferSignatureLoad=false`일 때만 트리거 — target: corelib/src/Memory.cpp:581~589
       Why: deferred 시 _stMem/_workingMem 비어 _lastSignature가 0으로 남음. 비빈 DB에도 addInfoAfterRun(0,0,0,0,0,...) 호출 → info_after_run 테이블에 가짜 fresh-start 레코드 삽입.
-- [ ] `Mem/DeferSignatureLoad` description에 WM 검증 우회 명시 — target: corelib/include/rtabmap/core/Parameters.h:227
+- [x] `Mem/DeferSignatureLoad` description에 WM 검증 우회 명시 — target: corelib/include/rtabmap/core/Parameters.h:227
       Why: deferred 모드의 동작 변경(loadOptimizedPoses WM 검증 우회)을 사용자가 description으로 인지할 수 있도록.
+
+**Outcome (Recovery amendments)**
+3개 narrow fix 모두 완료. 빌드는 사용자가 직접 수행.
+- Memory.cpp `loadOptimizedPoses()`: WM-membership for-loop + 실패 시 return 블록을 `if(!_deferSignatureLoad){ ... }` 로 감쌈. deferred 모드에서는 DB poses를 그대로 반환.
+- Memory.cpp `loadDataFromDb()` 내 `_lastSignature==0` 분기 조건: `&& !_deferSignatureLoad` 추가. deferred 시 가짜 fresh-start 레코드 삽입 방지.
+- Parameters.h `Mem/DeferSignatureLoad` description: WM-membership 우회 + prior-session optimized poses 보존 동작 한 문장 추가.
