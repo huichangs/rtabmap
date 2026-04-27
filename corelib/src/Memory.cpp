@@ -578,7 +578,7 @@ void Memory::loadDataFromDb(bool postInitClosingEvents)
 		}
 		UDEBUG("Total word references added = %d (in %f s)", _vwd->getTotalActiveReferences(), timer.ticks());
 
-		if(_lastSignature == 0)
+		if(_lastSignature == 0 && !_deferSignatureLoad)
 		{
 			// Memory is empty, save parameters
 			ParametersMap parameters = Parameters::getDefaultParameters();
