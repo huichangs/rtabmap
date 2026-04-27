@@ -2,9 +2,7 @@
 
 ## Backlog
 - [x] Upstream 0.23.5 포팅 빌드/동작 검증 — 2026-04-21 빌드 성공 + 실행 확인 완료 (Session 2/3 경유)
-- [ ] Immunized set 1회 구축 + 차감 방식 (분석 리포트 7.2)
-- [ ] Forget 일괄 처리 — Memory API 확인 후 루프 제거 (분석 리포트 7.3)
-- [ ] Zone 전환 예측 pre-loading (분석 리포트 7.5)
+- [x] Immunized set 1회 구축 + 차감 방식 (분석 리포트 7.2) — Session 1에서 TRANSFER 재설계 시 함께 적용됨 (Rtabmap.cpp:4706-4749). Session 5 정리
 
 ## Architecture Decisions
 - 2026-04-14: Semantic zone 기반 signature 관리 개념 자체는 유지 — TPS 저하는 구현 오류에 기인하며, 개념을 변경할 이유 없음
@@ -12,6 +10,8 @@
 - 2026-04-21: **메인 브랜치 승격** — `segment-on-0.23.5` → `segment`로 리네임하고, 기존 23.4 기반 `segment`는 `segment-0.23.4`로 보존(백업). 이후 개발/jetson 배포는 `segment`(0.23.5 기반)를 기준으로 한다. 원격 `origin/segment`는 여전히 23.4를 가리키므로 push 시 `origin/segment-0.23.4` 보존 후 `origin/segment` 갱신 필요(별도 사용자 확인).
 - 2026-04-21: **ROS2/Qt5 빌드는 anaconda env 오염된 쉘에서 수행하지 않는다** — 쉘 PATH에 `anaconda3/bin`이 들어있으면 CMake가 anaconda의 Qt5/libcurl/libtiff를 system보다 먼저 발견해서 moc silent fail 및 링커 심볼 미해결 유발. 빌드 전 `echo $PATH | grep anaconda`가 비어있어야 함. (`.bashrc`에서 `export PATH=~/anaconda3/bin:~/anaconda3/condabin:$PATH` 수동 라인 제거 + `conda config --set auto_activate_base false`로 해결됨)
 - 2026-04-21: **upstream 머지 후 첫 빌드 전 `git ls-files`와 upstream 간 파일 크기 대조로 소실 파일 전수 검사**를 권장 — `LoopClosureViewer.cpp`가 LF 정규화/머지 과정에서 0바이트로 소실된 사례. bash 스니펫은 Session 3 근인 주석 참고.
+- 2026-04-27: **분석 리포트 7.3(Forget 일괄 처리) 보류** — 7.3의 본래 동기는 "forget 루프가 retrieval 경로에 직렬 누적"이었으나, 이는 Session 1의 7.4(forget을 retrieval 이후로 이동)으로 해소됨. 현재 `Rtabmap.cpp:4722` 잔존 루프는 zone 단위로 forget()을 1회씩 호출(반복 횟수 = retire되는 zone 수, 통상 1~2)하므로 리포트가 지적한 "초과 signature 수만큼 반복"과 성격이 다름. `Memory::getRemovableSignatures` public화 비용 대비 이득 미미 → 백로그에서 제거.
+- 2026-04-27: **분석 리포트 7.5(Zone 전환 예측 pre-loading) 현 단계 미적용** — 사용자 판단으로 백로그에서 제거. 필요 시 향후 별도 세션으로 재도입.
 
 ---
 
@@ -123,3 +123,15 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 
 **Outcome**
 로컬 리네임 완료. 현재 `HEAD = segment @ f161ff6c`(0.23.5 포팅 + 빌드 성공본). 기존 23.4 기반 브랜치는 `segment-0.23.4 @ dc4f37fc`로 보존. 원격 반영은 별도 push 필요 — `origin/segment-0.23.4` 먼저 push하여 백업 확보 후 `origin/segment` 갱신해야 함(아직 수행 안 함).
+
+---
+
+### Session 5 (trivial) — 2026-04-27 — 백로그 정리: 7.2 완료 표기, 7.3/7.5 보류 결정 기록
+
+**Work Items**
+- [x] 7.2 백로그 항목을 `[x]`로 변경하고 Session 1 적용 위치(Rtabmap.cpp:4706-4749) 명시 — target: todo.md
+- [x] 7.3 보류 사유 Architecture Decisions에 기록 후 백로그 제거 — target: todo.md
+- [x] 7.5 미적용 사유 Architecture Decisions에 기록 (백로그 제거는 사용자 사전 수행) — target: todo.md
+
+**Outcome**
+백로그가 빈 상태로 정리됨. 7.2는 Session 1 TRANSFER 재설계 시 함께 적용된 것으로 코드 검증 완료. 7.3/7.5 보류 사유는 Architecture Decisions에 누적 기록.
