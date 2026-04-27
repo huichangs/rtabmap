@@ -3,6 +3,7 @@
 ## Backlog
 - [x] Upstream 0.23.5 포팅 빌드/동작 검증 — 2026-04-21 빌드 성공 + 실행 확인 완료 (Session 2/3 경유)
 - [x] Immunized set 1회 구축 + 차감 방식 (분석 리포트 7.2) — Session 1에서 TRANSFER 재설계 시 함께 적용됨 (Rtabmap.cpp:4706-4749). Session 5 정리
+- [ ] TRANSFER `_zoneHistory.size() > 1` 가드 재검토 — single-zone 상태에서도 WM threshold 초과 시 cleanup 허용 여부 — target: corelib/src/Rtabmap.cpp:4722 부근
 
 ## Architecture Decisions
 - 2026-04-14: Semantic zone 기반 signature 관리 개념 자체는 유지 — TPS 저하는 구현 오류에 기인하며, 개념을 변경할 이유 없음
@@ -135,3 +136,28 @@ zone-management-tps-analysis 리포트에서 확인된 구현 오류 중 즉시 
 
 **Outcome**
 백로그가 빈 상태로 정리됨. 7.2는 Session 1 TRANSFER 재설계 시 함께 적용된 것으로 코드 검증 완료. 7.3/7.5 보류 사유는 Architecture Decisions에 누적 기록.
+
+---
+
+### Session 6 — 2026-04-27 — Lazy zone-aware signature load 구현 (defer mechanism)
+
+**Branch:** feat/lazy-zone-load
+
+**Intent**
+부팅 시 working memory가 직전 세션의 800개 signature를 모두 로드하여 메모리 한계(_maxMemoryAllowed)를 초과하는 문제를 근본 해결한다. 현재 `Mem/InitWMWithAllNodes=false` 설정에도 불구하고 `DBDriver::loadLastNodes()` 경로에서 800개 signature가 한 번에 로드되는 구조적 문제를 분석하여, lazy loading 메커니즘을 도입함으로써 부팅 시 bootstrap zone에 속한 signature만 우선 로드하고 나머지는 필요할 때 점진적으로 활성화하도록 개선한다. 이는 naive forget-all 방식(비용 과다)보다 효율적이다.
+
+**Work Items**
+- [ ] `Mem/DeferSignatureLoad` 파라미터 신설 (기본값 false, semantic zone fork에서만 true) — target: corelib/include/rtabmap/core/Parameters.h 또는 ParametersEntry 정의 위치 + corelib/src/Parameters.cpp (default 등록)
+- [ ] `Memory::loadDataFromDb()` 함수에서 bulk signature load 블록 조건부 가드 — target: corelib/src/Memory.cpp:233~319 (signature 로드 루프 스킵 가드, label/link/`_allNodesInWM` 검사는 유지)
+- [ ] `Rtabmap.cpp` zone init 직후(bootstrap zone 결정 후) bootstrap zone에 속한 signature ID만 수집하여 `_memory->reactivateSignatures(bootstrapZoneIds, _maxMemoryAllowed, t)` 호출 — target: corelib/src/Rtabmap.cpp:1476~1521 (zone init 블록 직후)
+- [ ] `DeferSignatureLoad=true`일 때 `loadAllNodesInWM` 경로도 함께 스킵하여 로드 일관성 유지 — target: corelib/src/Memory.cpp (loadDataFromDb 내 `_loadAllNodesInWM` 조건부 처리)
+- [ ] 필요 시 `Memory.h` 시그니처 변동 반영 (reactivateSignatures 존재 확인 또는 신규 정의) — target: corelib/include/rtabmap/core/Memory.h
+
+**Risk**
+- **직전 세션이 zone 분할되지 않은 상태로 끝난 경우:** 대부분의 signature에 zoneId가 미할당되어 있을 수 있으며, 이 경우 bootstrap zone load가 비어 있을 가능성 → fallback 정책 필요 (예: DeferSignatureLoad 활성화 시에도 최소 N개 최근 signature는 로드하도록 보장)
+- `_loadAllNodesInWM` 스킵 시 기존 lifecycle 검증 (postInitClosingEvents 등) 깨지지 않도록 주의
+- Memory 모듈의 getters(링크/랜드마크 재구성) 호출 순서: DeferSignatureLoad 활성화 시에도 label/link 관련 로직은 유지되어야 zone 메타데이터 무결성 보존
+- TRANSFER 섹션의 `_zoneHistory.size() > 1` 가드 이슈(별도 backlog 항목)는 이번 세션 범위 제외. 지연된 signature 로드 이후 TRANSFER 수행 시 zone 상태 불완전할 가능성 → 향후 검토 필요
+
+**Outcome**
+(작업 진행 중. 완료 시 기입.)
