@@ -6,15 +6,7 @@
 - [x] **Lazy zone-aware signature load (Session 6)** — 2026-04-27 빌드/실환경 검증 완료. `Mem/DeferSignatureLoad=true`에서 부팅 직후 WM=19(bootstrap zone L1) 시작 + 직전 세션 graph 상태(local map=768, last localization id=923) 보존 확인.
 
 ### 다음 세션 우선순위 (2026-04-28~)
-- [ ] **[High] A/B 정량 비교** — `Mem/DeferSignatureLoad` true/false 두 번 돌려 부팅 직후 WM 크기 / 첫 프레임 RTAB-Map ms / forget 워닝 빈도 / RAM RSS 측정. Notion "Lazy Zone-Aware Signature Load — Session 6" 페이지의 "기대 효과" 표를 실제 수치로 채움.
-  - command:
-    ```
-    # false 비교군
-    ros2 launch rtabmap_launch rtabmap.launch.py ... rtabmap_args:="... --Mem/DeferSignatureLoad false ..." 2>&1 | tee ~/segment_ws/data/rtabmap_baseline_$(date +%Y%m%d_%H%M%S).log
-    # true 실험군
-    ros2 launch rtabmap_launch rtabmap.launch.py ... rtabmap_args:="... --Mem/DeferSignatureLoad true ..." 2>&1 | tee ~/segment_ws/data/rtabmap_defer_$(date +%Y%m%d_%H%M%S).log
-    ```
-  - 각 로그 파일을 가져오면 측정/시각화는 orchestrator가 처리.
+- [x] **[High] A/B 정성 확인** — 2026-04-28 사용자 실환경 재실행. `Mem/DeferSignatureLoad=true`에서 부팅 직후 첫 WM 크기 + removed signature 개수 모두 의도대로 동작 확인. 정량 수치(부팅 직후 WM/첫 프레임 RTAB-Map ms/forget 빈도/RAM RSS)로 Notion "기대 효과" 표 채우는 작업은 paper/report 작성 시 재측정으로 미룸. Session 8 (trivial) 참조.
 - [x] **[High] 원격 push** — 2026-04-28 완료. `feat/lazy-zone-load` → `segment` FF 머지 후 `git push origin segment` (937b4968..de8416a2, 14 commits). `segment-0.23.4`는 이미 `origin`과 동기 상태(`dc4f37fc`)였으므로 별도 push 불필요. Session 7 (trivial) 참조.
 - [ ] **[Medium] rtabmap_viz GUI에 `Mem/DeferSignatureLoad` widget 추가** — Session 6 실행 로그 워닝: `[rtabmap_viz-3] PreferencesDialog.cpp:1996 Can't find the related QWidget for parameter Mem/DeferSignatureLoad`. CLI는 정상, UI 토글만 미지원.
   - target: `guilib/src/ui/preferencesDialog.ui` (체크박스) + `guilib/src/PreferencesDialog.cpp` (binding)
@@ -260,3 +252,14 @@ Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처�
 원격 `segment`가 0.23.5 포팅본 + Session 6 lazy zone-aware load 본체 + recovery 3건까지 모두 반영된 상태로 갱신됨. `origin/segment-0.23.4` 백업은 이미 동기 상태(`dc4f37fc`)였으므로 추가 push 없음. `feat/lazy-zone-load` 로컬 브랜치는 역할 종료(FF 머지 완료) — 정리 시 `git branch -d feat/lazy-zone-load` 안전.
 
 다음 세션은 백로그 첫 항목인 [High] A/B 정량 비교 부터 진행 가능.
+
+---
+
+### Session 8 (trivial) — 2026-04-28 — Session 6 정성 확인 완료, 정량 측정 보류 결정
+
+**Work Items**
+- [x] 사용자 실환경 재실행: `Mem/DeferSignatureLoad=true` 부팅 시 첫 WM 크기/removed signature 개수 정상 동작 확인 (Session 6 검증 + 동일 결과 재현)
+- [x] 백로그 [High] A/B 항목을 "정성 확인" 단계로 [x] 처리 + Notion "기대 효과" 표 수치 채우기는 paper/report 작성 시점으로 미룸 — target: todo.md
+
+**Outcome**
+Session 6 lazy zone-aware load는 정성 검증 마감. 다음 작업은 백로그 [Medium] `rtabmap_viz` GUI에 `Mem/DeferSignatureLoad` 위젯 추가로 진행.
