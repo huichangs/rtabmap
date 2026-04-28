@@ -15,11 +15,7 @@
     ros2 launch rtabmap_launch rtabmap.launch.py ... rtabmap_args:="... --Mem/DeferSignatureLoad true ..." 2>&1 | tee ~/segment_ws/data/rtabmap_defer_$(date +%Y%m%d_%H%M%S).log
     ```
   - 각 로그 파일을 가져오면 측정/시각화는 orchestrator가 처리.
-- [ ] **[High] 원격 push (사용자 확인 필수, 자동 수행 금지)** — Session 4 AD에 따라 백업 → main 갱신 순.
-  ```
-  git push origin segment-0.23.4   # 23.4 백업 먼저
-  git push origin segment          # 0.23.5 + Session 6 본 갱신
-  ```
+- [x] **[High] 원격 push** — 2026-04-28 완료. `feat/lazy-zone-load` → `segment` FF 머지 후 `git push origin segment` (937b4968..de8416a2, 14 commits). `segment-0.23.4`는 이미 `origin`과 동기 상태(`dc4f37fc`)였으므로 별도 push 불필요. Session 7 (trivial) 참조.
 - [ ] **[Medium] rtabmap_viz GUI에 `Mem/DeferSignatureLoad` widget 추가** — Session 6 실행 로그 워닝: `[rtabmap_viz-3] PreferencesDialog.cpp:1996 Can't find the related QWidget for parameter Mem/DeferSignatureLoad`. CLI는 정상, UI 토글만 미지원.
   - target: `guilib/src/ui/preferencesDialog.ui` (체크박스) + `guilib/src/PreferencesDialog.cpp` (binding)
   - reference: 기존 `Mem/InitWMWithAllNodes` 위젯 자리 인접에 동일 패턴으로 추가 가능.
@@ -250,3 +246,17 @@ Review가 confirmed한 functional risk 2건 + doc gap 1건을 narrow fix로 처�
 - `getPaths() path.size()=0!? nearestId=258 ids=0, aborting...` — path planning이 active zone 외부 nearestId에서 침묵 실패. localization 자체는 정상. → 백로그 항목으로 추가됨.
 - `[rtabmap_viz-3] Can't find the related QWidget for parameter Mem/DeferSignatureLoad` — UI에 widget 미정의. CLI는 정상. → 백로그 항목으로 추가됨.
 - `Rejecting localization (928 <-> 923) ... error ratio 3.025984` — outlier rejection (`RGBD/OptimizeMaxError=3.0`). 정상 graph optimizer 동작.
+
+---
+
+### Session 7 (trivial) — 2026-04-28 — 원격 push 완료 (Session 6 본체 origin 반영)
+
+**Work Items**
+- [x] `feat/lazy-zone-load` → `segment` fast-forward 머지 (14 commits, 코드 변경 + recovery + docs)
+- [x] `git push origin segment` 실행 → `937b4968..de8416a2` 반영 — target: origin/segment
+- [x] 백로그 [High] 원격 push 항목 `[x]` 처리 + Session 4 outcome의 "원격 segment는 아직 23.4" 추정이 오인이었음을 명시 — target: todo.md
+
+**Outcome**
+원격 `segment`가 0.23.5 포팅본 + Session 6 lazy zone-aware load 본체 + recovery 3건까지 모두 반영된 상태로 갱신됨. `origin/segment-0.23.4` 백업은 이미 동기 상태(`dc4f37fc`)였으므로 추가 push 없음. `feat/lazy-zone-load` 로컬 브랜치는 역할 종료(FF 머지 완료) — 정리 시 `git branch -d feat/lazy-zone-load` 안전.
+
+다음 세션은 백로그 첫 항목인 [High] A/B 정량 비교 부터 진행 가능.
